@@ -50,7 +50,7 @@ const _origLoadModule = loadModule
 loadModule = function () {
   _origLoadModule()
   ASM_CONSTS = new Proxy({}, {
-    get (target, prop) {
+    get () {
       return $0 => stringToNewUTF8(Emval.toValue($0))
     }
   })

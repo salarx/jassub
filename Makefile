@@ -31,7 +31,9 @@ SIMD_ARGS = \
 	-mavx \
 	-mavx2 \
 	-matomics \
-	-ftree-vectorize
+	-ftree-vectorize \
+	-mfma \
+	-mrelaxed-simd
 
 ifeq (${MODERN},1)
 	WORKER_NAME = jassub-worker-modern
