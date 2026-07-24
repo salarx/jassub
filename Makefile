@@ -14,7 +14,7 @@ endif
 BUILD_LIB_DIR := $(BASE_DIR)build/lib/$(BUILD_VARIANT)
 DIST_DIR := $(BASE_DIR)dist/libraries/$(BUILD_VARIANT)
 
-export CFLAGS = -O3 -flto -fno-rtti -fno-exceptions -fno-math-errno -s USE_PTHREADS=1 -mnontrapping-fptoint -msign-ext -mbulk-memory -mreference-types
+export CFLAGS = -O3 -flto -fno-rtti -fno-exceptions -fno-math-errno -s USE_PTHREADS=1 -mnontrapping-fptoint -msign-ext -mbulk-memory -mreference-types -ffast-math
 export CXXFLAGS = $(CFLAGS)
 export PKG_CONFIG_PATH = $(DIST_DIR)/lib/pkgconfig
 export EM_PKG_CONFIG_PATH = $(PKG_CONFIG_PATH)
@@ -30,7 +30,8 @@ SIMD_ARGS = \
 	-msse4.2 \
 	-mavx \
 	-mavx2 \
-	-matomics
+	-matomics \
+	-ftree-vectorize
 
 ifeq (${MODERN},1)
 	WORKER_NAME = jassub-worker-modern

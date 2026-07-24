@@ -43,3 +43,15 @@ if (!self.name.startsWith('em-pthread')) {
     }
   }
 }
+
+// EM_ASM_PTR generates different code indices per build variant.
+// The Proxy defaultsto the equivalent inline behavior.
+const _origLoadModule = loadModule
+loadModule = function () {
+  _origLoadModule()
+  ASM_CONSTS = new Proxy({}, {
+    get (target, prop) {
+      return $0 => stringToNewUTF8(Emval.toValue($0))
+    }
+  })
+}
