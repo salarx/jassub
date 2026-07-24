@@ -20,7 +20,7 @@
   }
 
   const fonts: string[] = []
-  let video = 'http://commondatastorage.googleapis.com/gtv-videos-bucket/sample/BigBuckBunny.mp4'
+  let video = 'https://remotion.media/video-30m.mp4'
   let subtitle = ''
   async function handleTransfer (e: { dataTransfer?: DataTransfer | null, clipboardData?: DataTransfer | null } & Event) {
     for (const file of await transferToFileList(e)) {
