@@ -1,0 +1,34 @@
+diff --git a/dist/ass.global.js b/dist/ass.global.js
+index c2b7df5f6833b0e45c78947566ef1af13a46556d..818185b50c50cbbb459ca2a43077bc8e070ddd3d 100644
+--- a/dist/ass.global.js
++++ b/dist/ass.global.js
+@@ -1724,8 +1724,11 @@ var ASS = (function () {
+     store.actives = [];
+     store.space = [];
+   }
+-
++  let lastMediaTime = 0
+   function framing(store, mediaTime) {
++    const timeDiff = mediaTime - lastMediaTime
++    lastMediaTime = mediaTime
++    globalThis.profile(timeDiff)
+     const { dialogues, actives } = store;
+     const vct = fixFloat(mediaTime - store.delay);
+     for (let i = actives.length - 1; i >= 0; i -= 1) {
+diff --git a/dist/ass.js b/dist/ass.js
+index 58d49735bcfadc4761eb5f993262ef9240f98640..a96fe728f4274e150311ac8119f89c250a772363 100644
+--- a/dist/ass.js
++++ b/dist/ass.js
+@@ -1721,8 +1721,11 @@ function clear(store) {
+   store.actives = [];
+   store.space = [];
+ }
+-
++let lastMediaTime = 0
+ function framing(store, mediaTime) {
++  const timeDiff = mediaTime - lastMediaTime
++  lastMediaTime = mediaTime
++  globalThis.profile(timeDiff)
+   const { dialogues, actives } = store;
+   const vct = fixFloat(mediaTime - store.delay);
+   for (let i = actives.length - 1; i >= 0; i -= 1) {

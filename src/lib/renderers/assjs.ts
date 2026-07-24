@@ -1,4 +1,4 @@
-import ASS from 'assjs-v2'
+import ASS from 'assjs'
 import throughput from 'throughput'
 
 import type { PerfCallback } from '$lib/constants'

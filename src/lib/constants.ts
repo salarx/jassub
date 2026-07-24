@@ -32,7 +32,7 @@ export const subtitleList: Record<string, Subtitle> = {
     delay: 0,
     fonts: [],
     subUrl: '/subtitles/test.ass',
-    videoUrl: 'http://commondatastorage.googleapis.com/gtv-videos-bucket/sample/BigBuckBunny.mp4'
+    videoUrl: 'https://remotion.media/video-30m.mp4'
   },
   fate: {
     delay: -0.041,
