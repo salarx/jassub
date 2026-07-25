@@ -149,7 +149,7 @@ export default class JASSUB {
     if (JASSUB._supportsSIMD != null) return
 
     try {
-      JASSUB._supportsSIMD = WebAssembly.validate(Uint8Array.of(
+      const module = new WebAssembly.Module(Uint8Array.of(
         // WASM magic number + version 1
         0x00, 0x61, 0x73, 0x6d, 0x01, 0x00, 0x00, 0x00,
         // Type section: 1 type, func () -> v128
@@ -171,6 +171,8 @@ export default class JASSUB {
         // end
         0x0b
       ))
+      if (!(module instanceof WebAssembly.Module) || !(new WebAssembly.Instance(module) instanceof WebAssembly.Instance)) throw new Error('SIMD not supported')
+      JASSUB._supportsSIMD = true
     } catch (e) {
       JASSUB._supportsSIMD = false
     }
