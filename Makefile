@@ -14,7 +14,7 @@ endif
 BUILD_LIB_DIR := $(BASE_DIR)build/lib/$(BUILD_VARIANT)
 DIST_DIR := $(BASE_DIR)dist/libraries/$(BUILD_VARIANT)
 
-export CFLAGS = -O3 -flto -fno-rtti -fno-exceptions -fno-math-errno -s USE_PTHREADS=1 -mnontrapping-fptoint -msign-ext -mbulk-memory -mreference-types -ffast-math
+export CFLAGS = -O3 -flto -fno-rtti -fno-exceptions -fno-math-errno -s USE_PTHREADS=1 -mnontrapping-fptoint -msign-ext -mbulk-memory -mreference-types -ffast-math -matomics
 export CXXFLAGS = $(CFLAGS)
 export PKG_CONFIG_PATH = $(DIST_DIR)/lib/pkgconfig
 export EM_PKG_CONFIG_PATH = $(PKG_CONFIG_PATH)
@@ -30,7 +30,6 @@ SIMD_ARGS = \
 	-msse4.2 \
 	-mavx \
 	-mavx2 \
-	-matomics \
 	-ftree-vectorize \
 	-mfma \
 	-mrelaxed-simd
@@ -110,10 +109,10 @@ $(BUILD_LIB_DIR)/harfbuzz/configure: lib/harfbuzz $(wildcard $(BASE_DIR)build/pa
 	cd $(BUILD_LIB_DIR)/harfbuzz && $(RECONF_AUTO)
 
 $(DIST_DIR)/lib/libharfbuzz.a: $(BUILD_LIB_DIR)/freetype/build_hb/dist_hb/lib/libfreetype.a $(BUILD_LIB_DIR)/harfbuzz/configure
+	$(call PREPARE_SRC_PATCHED,harfbuzz)
+	cd $(BUILD_LIB_DIR)/harfbuzz && $(RECONF_AUTO)
 	cd $(BUILD_LIB_DIR)/harfbuzz && \
-	EM_PKG_CONFIG_PATH=$(PKG_CONFIG_PATH):$(BUILD_LIB_DIR)/freetype/build_hb/dist_hb/lib/pkgconfig \
-	CFLAGS="-DHB_NO_MT $(CFLAGS)" \
-	CXXFLAGS="-DHB_NO_MT $(CFLAGS)" \
+	EM_PKG_CONFIG_PATH=$(BUILD_LIB_DIR)/freetype/build_hb/dist_hb/lib/pkgconfig:$(PKG_CONFIG_PATH) \
 	$(call CONFIGURE_AUTO) \
 		--with-freetype \
 		--with-glib=no \

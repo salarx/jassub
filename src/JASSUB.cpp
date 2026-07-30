@@ -268,6 +268,9 @@ public:
     ass_process_data(track, data.data(), data.size());
   }
 
+  void processChunk(const std::string &data, double timecode, double duration) {
+    ass_process_chunk(track, data.data(), data.size(), (long long)timecode, (long long)duration);
+  }
 
   void createEvent(emscripten::val obj) {
     setEvent(ass_alloc_event(track), obj);
@@ -343,6 +346,7 @@ EMSCRIPTEN_BINDINGS(JASSUB) {
     .function("removeAllEvents", &JASSUB::removeAllEvents)
     .function("setMemoryLimits", &JASSUB::setMemoryLimits)
     .function("processData", &JASSUB::processData)
+    .function("processChunk", &JASSUB::processChunk)
     .function("rawRender", &JASSUB::rawRender)
     .function("styleOverride", &JASSUB::styleOverride)
     .function("disableStyleOverride", &JASSUB::disableStyleOverride)

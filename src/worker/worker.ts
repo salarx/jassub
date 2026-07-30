@@ -107,6 +107,12 @@ export class ASSRenderer {
     this._wasm.processData(events)
   }
 
+  // processes a single subtitle packet with ReadOrder, timecode and duration
+  // useful for streaming subtitles from Matroska-style demuxers
+  processChunk (data: string, timecode: number, duration: number) {
+    this._wasm.processChunk(data, timecode, duration)
+  }
+
   createEvent (event: ASSEvent) {
     this._wasm.createEvent(event)
   }
