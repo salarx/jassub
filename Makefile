@@ -187,6 +187,8 @@ PERFORMANCE_ARGS = \
 		-msign-ext \
 		-mreference-types \
 		-s STACK_SIZE=256KB \
+		-ffast-math \
+		-matomics \
 		-O3
 
 # args for reducing size
