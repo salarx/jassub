@@ -1,0 +1,49 @@
+<!DOCTYPE html><meta charset=utf-8>
+<body style="margin:0;background:#111;color:#eee;font:13px monospace">
+<div id="stage" style="position:relative;width:80%;height:60vh">
+<video id=v muted loop playsinline style="width:100%;height:100%;object-fit:contain"></video></div>
+<pre id=log>boot</pre>
+<script type="module">
+const log = m => { document.getElementById('log').textContent = String(m); window.__s = String(m) }
+window.onerror = e => log('ERR ' + e)
+window.addEventListener('unhandledrejection', e => log('REJ ' + e.reason))
+try {
+  const B = new URLSearchParams(location.search).get('build') || 'baseline'
+  const { default: JASSUB } = await import(`./${B}/jassub.js`)
+  const v = document.getElementById('v')
+  const A = new URL('../assets', location.href).href
+  v.src = `${A}/videos/Beastars.mp4`
+  await new Promise(r => v.addEventListener('loadedmetadata', r, { once: true }))
+  await v.play()
+  log('video ok, constructing')
+  const FONTS = ['architext.regular.ttf','FRABK.TTF','allison-script.regular.otf','Lato-Regular.ttf','chawp.otf','arial.ttf','SlatePro-Medium.otf']
+    .map(f => `${A}/fonts/${encodeURIComponent(f)}`)
+  window.__t0 = performance.now()
+  const i = new JASSUB({ video: v, subUrl: `${A}/subtitles/beastars.ass`, fonts: FONTS, timeOffset: 246.38, queryFonts: false, debug: true })
+  window.__i = i
+  i.debug.onsubtitleFrameCallback = (_, d) => { window.__fps = d.fps.toFixed(1); window.__pd = d.processingDuration }
+  await i.ready
+  window.__tReady = performance.now() - window.__t0
+
+  // first frame that actually reached the renderer
+  const proto = Object.getPrototypeOf(i)
+  const od = proto._demandRender
+  proto._demandRender = async function (...a) {
+    const r = await od.apply(this, a)
+    if (window.__tFirstDraw === undefined) window.__tFirstDraw = performance.now() - window.__t0
+    return r
+  }
+
+  window.__net = () => performance.getEntriesByType('resource')
+    .filter(e => /\.(ass|ttf|otf|woff2|wasm)$/i.test(new URL(e.name).pathname))
+    .map(e => ({
+      file: decodeURIComponent(new URL(e.name).pathname.split('/').pop()),
+      startMs: +e.startTime.toFixed(0),
+      durMs: +e.duration.toFixed(0),
+      kb: +((e.transferSize || e.encodedBodySize) / 1024).toFixed(0)
+    }))
+    .sort((a, b) => a.startMs - b.startMs)
+
+  log('READY renderer=' + !!i.renderer)
+} catch (e) { log('CATCH ' + (e && e.stack || e)) }
+</script>

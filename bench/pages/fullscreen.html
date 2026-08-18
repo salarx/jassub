@@ -1,0 +1,118 @@
+<!DOCTYPE html>
+<html>
+<head><meta charset="utf-8"><title>JASSUB fullscreen</title>
+<style>
+  body { margin: 0; background: #111; color: #eee; font: 12px ui-monospace, monospace; }
+  #player { position: relative; width: 900px; height: 506px; background: #000; }
+  video { width: 100%; height: 100%; object-fit: contain; display: block; }
+  #player:fullscreen { width: 100vw; height: 100vh; }
+  #go { font: inherit; padding: 6px 12px; margin: 8px; }
+  #log { padding: 8px; white-space: pre; }
+  #hud { position: fixed; top: 0; right: 0; z-index: 9; background: rgba(0,0,0,.82); color: #0f0;
+         padding: 8px 10px; white-space: pre; font: 11px ui-monospace, monospace; pointer-events: none; }
+  #player:fullscreen #inFs { display: block; }
+  #inFs { display: none; position: absolute; bottom: 12px; left: 12px; z-index: 9;
+          background: rgba(0,0,0,.7); color: #0f0; padding: 6px 9px; font: 11px ui-monospace, monospace;
+          white-space: pre; pointer-events: none; }
+</style>
+</head>
+<body>
+  <div id="player"><video id="v" muted loop playsinline></video><pre id="inFs">hud</pre></div>
+  <pre id="hud">measuring…</pre>
+  <button id="go">toggle fullscreen</button>
+  <pre id="log">idle</pre>
+<script type="module">
+// Real Fullscreen API, not a resized div. requestFullscreen needs a trusted gesture, so the button is
+// clicked by the driver rather than called directly.
+const p = new URLSearchParams(location.search)
+const BUILD = p.get('build') || 'patched'
+const log = m => { document.getElementById('log').textContent = String(m); window.__s = String(m) }
+window.addEventListener('unhandledrejection', e => log('REJ ' + (e.reason?.stack || e.reason)))
+
+const { default: JASSUB } = await import(`../dist/${BUILD}/jassub.js`)
+const A = new URL('../assets', location.href).href
+const FONTS = ['architext.regular.ttf','FRABK.TTF','allison-script.regular.otf','Lato-Regular.ttf','chawp.otf','arial.ttf','SlatePro-Medium.otf']
+  .map(f => `${A}/fonts/${encodeURIComponent(f)}`)
+
+const video = document.getElementById('v')
+video.src = `${A}/videos/Beastars.mp4`
+await new Promise(r => video.addEventListener('loadedmetadata', r, { once: true }))
+await video.play()
+
+const instance = new JASSUB({
+  video, subUrl: `${A}/subtitles/beastars.ass`, fonts: FONTS,
+  timeOffset: 246.38, queryFonts: false, debug: true
+})
+window.__i = instance
+
+// count libass reconfigures so we can see the jump detection bypass the debounce
+window.__reconf = 0
+const rawPost = Worker.prototype.postMessage
+Worker.prototype.postMessage = function (msg, ...rest) {
+  const path = msg && msg.path
+  if (Array.isArray(path) ? path.includes('_resizeCanvas') : /_resizeCanvas/.test(String(msg && msg.path))) window.__reconf++
+  return rawPost.call(this, msg, ...rest)
+}
+
+await instance.ready
+await new Promise(r => setTimeout(r, 3000))
+
+// the canvas must cover exactly the video's letterboxed content box, in or out of fullscreen
+window.__measure = () => {
+  const v = document.getElementById('v')
+  const c = document.querySelector('canvas')
+  const vr = v.getBoundingClientRect()
+  const cr = c.getBoundingClientRect()
+  const ar = v.videoWidth / v.videoHeight
+  let w = vr.width; let h = vr.height
+  if (vr.width / vr.height > ar) w = vr.height * ar; else h = vr.width / ar
+  const cx = vr.x + (vr.width - w) / 2
+  const cy = vr.y + (vr.height - h) / 2
+  return {
+    fullscreen: !!document.fullscreenElement,
+    dpr: devicePixelRatio,
+    screen: [screen.width, screen.height],
+    inner: [innerWidth, innerHeight],
+    chrome: outerHeight - innerHeight,
+    videoBox: [+vr.width.toFixed(1), +vr.height.toFixed(1)],
+    canvasBox: [+cr.width.toFixed(1), +cr.height.toFixed(1)],
+    backing: [c.width, c.height],
+    misalign: [+(cr.x - cx).toFixed(1), +(cr.y - cy).toFixed(1), +(cr.width - w).toFixed(1), +(cr.height - h).toFixed(1)],
+    backingScale: +(c.width / w).toFixed(3),
+    reconf: window.__reconf,
+    dropped: instance.debug?.droppedFrames ?? 0
+  }
+}
+
+document.getElementById('go').addEventListener('click', async () => {
+  if (document.fullscreenElement) await document.exitFullscreen()
+  else await document.getElementById('player').requestFullscreen()
+})
+
+// live HUD so the numbers can be read while toggling fullscreen or dragging between displays
+const fmt = m => [
+  `fullscreen : ${m.fullscreen}`,
+  `screen     : ${screen.width}x${screen.height}   dPR ${devicePixelRatio}`,
+  `window     : inner ${innerWidth}x${innerHeight}  chrome ${outerHeight - innerHeight}px`,
+  `video box  : ${m.videoBox.join('x')}`,
+  `canvas box : ${m.canvasBox.join('x')}`,
+  `backing    : ${m.backing.join('x')}   scale ${m.backingScale}`,
+  `MISALIGN   : ${m.misalign.join(', ')}   ${m.misalign.every(v => Math.abs(v) < 1) ? 'OK' : '*** OFF ***'}`,
+  `reconfigs  : ${m.reconf}    dropped ${m.dropped}`
+].join('\n')
+const tick = () => {
+  try {
+    const t = fmt(window.__measure())
+    document.getElementById('hud').textContent = t
+    document.getElementById('inFs').textContent = t
+  } catch {}
+  requestAnimationFrame(tick)
+}
+tick()
+
+window.__ready = true
+log('ready — click the button (or press F) to toggle fullscreen; drag the window between displays to check dPR changes')
+addEventListener('keydown', e => { if (e.key === 'f' || e.key === 'F') document.getElementById('go').click() })
+</script>
+</body>
+</html>

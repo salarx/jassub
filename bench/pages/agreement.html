@@ -1,0 +1,204 @@
+<!DOCTYPE html>
+<html>
+<head><meta charset="utf-8"><title>JASSUB colour agreement</title>
+<style>
+  body { margin: 0; background: #111; color: #eee; font: 12px ui-monospace, monospace; }
+  /* the player box is the screenshot target, so it must be at a stable integer offset */
+  #player { position: absolute; left: 0; top: 0; width: 960px; height: 540px; background: #000; }
+  video { width: 100%; height: 100%; object-fit: contain; display: block; }
+  #log { position: absolute; top: 560px; left: 8px; white-space: pre; }
+</style>
+</head>
+<body>
+  <div id="player"><video id="v" muted playsinline></video></div>
+  <pre id="log">idle</pre>
+<script type="module">
+// Does a subtitle glyph sit on the video's colours the way the maths says it should?
+//
+// Everything colour.mjs checks is relative: build A's hash against build B's. A canvas-vs-video
+// colour mismatch is identical in both builds, so it hashes clean and passes. This page exists to
+// measure the absolute thing instead, by handing the driver three values per sampled pixel:
+//
+//   canvas  the subtitle canvas pixel, unpremultiplied, as the renderer produced it
+//   video   the video frame pixel underneath it, via drawImage into a 2D canvas
+//   expect  src-over of canvas onto video, computed here in plain sRGB arithmetic
+//
+// The driver screenshots the composited player box and compares the real composite against expect.
+// A control set of pixels with no subtitle coverage isolates where any divergence comes from: if
+// those already differ, the platform is transforming video separately from canvas content, which is
+// the suspected cause of glyph/video colour drift on macOS.
+const p = new URLSearchParams(location.search)
+const BUILD = p.get('build') || 'patched'
+const RENDERER = p.get('renderer') || 'auto'
+const PACKED = p.get('packed') !== '0'
+const MRH = +(p.get('mrh') || 0)
+const AT = +(p.get('t') || 3.35)
+const TRACK = p.get('track') || 'beastars'
+const MATRIX = (p.get('matrix') || '').toUpperCase()   // '' = leave default, or 'BT601' / 'BT709' / 'RGB'
+const VIDEO = p.get('video') || ''
+const OFFSET = p.get('offset')
+const MAX = +(p.get('max') || 400)            // sampled pixels per set
+
+const log = m => { document.getElementById('log').textContent = String(m); window.__err = String(m) }
+window.addEventListener('unhandledrejection', e => log('REJ ' + (e.reason?.stack || e.reason)))
+
+const { default: JASSUB } = await import(`../dist/${BUILD}/jassub.js`)
+const A = new URL('../assets', location.href).href
+
+// Subtitle and font lists are matrix.html's, so the same track name means the same content here.
+// The video pairing is only real for beastars — that is the upstream demo's own pairing, and the one
+// throughput.html and colour.mjs use with timeOffset 246.38. The other tracks have no paired video in
+// this repo, so they get cfr.mp4 as a carrier: this check compares the composite against a blend
+// computed from that same frame, so any video works, but do not read the pairing as meaningful.
+// Override with ?video= and ?offset= when a specific frame matters.
+const TRACKS = {
+  beastars: { sub: 'beastars.ass', video: 'Beastars.mp4', offset: 246.38, fonts: ['architext.regular.ttf', 'FRABK.TTF', 'allison-script.regular.otf', 'Lato-Regular.ttf', 'chawp.otf', 'arial.ttf', 'SlatePro-Medium.otf'] },
+  fate: { sub: 'FGOBD.ass', video: 'cfr.mp4', offset: 0, fonts: ['Averia Sans Libre Light.ttf', 'Averia Serif Simple Light.ttf', 'Gramond.ttf'] },
+  simple: { sub: 'test.ass', video: 'cfr.mp4', offset: 0, fonts: [] },
+  variable: { sub: 'box.ass', video: 'cfr.mp4', offset: 0, fonts: [] },
+  kusriya: { sub: 'Kusriya S2 OP1v3.ass', video: 'cfr.mp4', offset: 0, fonts: ['FOT-TsukuCOldMinPr6NR.OTF', 'RoughFlowers.TTF'] }
+}
+const cfg = TRACKS[TRACK]
+if (!cfg) throw new Error(`unknown track ${TRACK}`)
+const OFF = OFFSET == null ? cfg.offset : +OFFSET
+
+const FONTS = cfg.fonts.map(f => `${A}/fonts/${encodeURIComponent(f)}`)
+
+const video = document.getElementById('v')
+video.src = `${A}/videos/${VIDEO || cfg.video}`
+await new Promise(r => video.addEventListener('loadedmetadata', r, { once: true }))
+// paused on a fixed frame: this measures colour, so the frame must not move under the sample
+video.currentTime = OFF + AT
+await new Promise(r => video.addEventListener('seeked', r, { once: true }))
+
+const instance = new JASSUB({
+  video,
+  subUrl: `${A}/subtitles/${encodeURIComponent(cfg.sub)}`,
+  fonts: FONTS,
+  timeOffset: OFF,
+  queryFonts: false,
+  debug: true,
+  ...(RENDERER === 'auto' ? {} : { renderer: RENDERER }),
+  packed: PACKED,
+  ...(MRH ? { maxRenderHeight: MRH } : {})
+})
+window.__i = instance
+await instance.ready
+// the real API is on the renderer proxy and must be awaited — colour.mjs drives it the same way.
+// deliberately not optional-chained: a wrong name here would silently measure the default matrix.
+if (MATRIX) await instance.renderer._setColorSpace(MATRIX)
+await new Promise(r => setTimeout(r, 2500))   // fonts + first layout settled
+
+// force a real render of this exact frame rather than reusing whatever was last drawn
+instance.manualRender({ expectedDisplayTime: performance.now(), width: 1920, height: 1080, mediaTime: AT }, true)
+await new Promise(r => setTimeout(r, 600))
+
+const canvas = document.querySelector('#player canvas')
+
+// video pixels, read through drawImage: this is the browser's own idea of the frame's colour,
+// which is the value the compositor should be blending against
+const grabVideo = (w, h) => {
+  const c = document.createElement('canvas')
+  c.width = w; c.height = h
+  const ctx = c.getContext('2d', { willReadFrequently: true })
+  ctx.drawImage(video, 0, 0, w, h)
+  return ctx.getImageData(0, 0, w, h)
+}
+
+// a glyph interior pixel, not an antialiased edge: fully opaque, and surrounded by fully opaque.
+// edge pixels carry the renderer's own blending and would mask a compositor difference.
+const interior = (a, x, y, w) => {
+  if (a[(y * w + x) * 4 + 3] < 250) return false
+  for (const [dx, dy] of [[-1, 0], [1, 0], [0, -1], [0, 1]]) {
+    if (a[((y + dy) * w + (x + dx)) * 4 + 3] < 250) return false
+  }
+  return true
+}
+// control pixel: no subtitle coverage at all, and none nearby either
+const clear = (a, x, y, w) => {
+  for (let dy = -2; dy <= 2; dy++) {
+    for (let dx = -2; dx <= 2; dx++) {
+      if (a[((y + dy) * w + (x + dx)) * 4 + 3] !== 0) return false
+    }
+  }
+  return true
+}
+
+window.__sample = async () => {
+  const cr = canvas.getBoundingClientRect()
+  const pr = document.getElementById('player').getBoundingClientRect()
+  const cw = canvas.width; const ch = canvas.height
+
+  // re-render this frame immediately before reading: a WebGL/WebGPU drawing buffer is not guaranteed
+  // to survive compositing, and a stale read is what produced zero glyph pixels the first time
+  // 1920x1080 as the requested frame size, matching matrix.html and colour.mjs. Deriving this from
+  // canvas.width rendered into the 300x150 default of a worker-owned canvas, which produced glyphs too
+  // small to have any interior pixels at all.
+  // mediaTime is relative: timeOffset is added internally, so passing OFF + AT here asked for
+  // ~2x the offset into the track, where there are no events, and every canvas came back empty.
+  // Not optional-chained on purpose — a missing method must throw, not silently measure a blank frame.
+  await instance.manualRender(
+    { expectedDisplayTime: performance.now(), width: 1920, height: 1080, mediaTime: AT }, true
+  )
+  await new Promise(r => setTimeout(r, 250))
+
+  // createImageBitmap is the route colour.mjs uses, and the only one that reliably captures
+  // WebGL/WebGPU canvas contents — drawImage on the element reads a cleared buffer
+  const bmp = await createImageBitmap(canvas)
+  const off = new OffscreenCanvas(bmp.width, bmp.height)
+  const octx = off.getContext('2d', { willReadFrequently: true })
+  octx.drawImage(bmp, 0, 0)
+  const sub = octx.getImageData(0, 0, bmp.width, bmp.height).data
+
+  // The bitmap is authoritative for pixel indexing, not canvas.width: when the canvas is transferred
+  // to the worker as an OffscreenCanvas the element's width/height attributes stay at the 300x150
+  // default while the real buffer is whatever the renderer chose. Indexing by the attribute read past
+  // the end of the bitmap and produced NaN expectations.
+  const W = bmp.width; const H = bmp.height
+  const vid = grabVideo(W, H).data
+
+  const glyph = []
+  const control = []
+  // deterministic stride rather than random sampling, so two runs sample the same pixels
+  const stride = Math.max(1, Math.floor((W * H) / (MAX * 24)))
+  for (let i = 0, n = 0; i < W * H && (glyph.length < MAX || control.length < MAX); i++, n++) {
+    if (n % stride) continue
+    const x = i % W; const y = (i / W) | 0
+    if (x < 3 || y < 3 || x > W - 4 || y > H - 4) continue
+    const o = (y * W + x) * 4
+    const px = {
+      // canvas coordinates -> page CSS coordinates, which is what the screenshot is indexed by
+      pageX: cr.left - pr.left + (x + 0.5) * (cr.width / W),
+      pageY: cr.top - pr.top + (y + 0.5) * (cr.height / H),
+      canvas: [sub[o], sub[o + 1], sub[o + 2], sub[o + 3]],
+      video: [vid[o], vid[o + 1], vid[o + 2]]
+    }
+    if (glyph.length < MAX && interior(sub, x, y, W)) {
+      const a = px.canvas[3] / 255
+      // src-over in plain sRGB byte space, the same arithmetic the compositor should be doing
+      px.expect = [0, 1, 2].map(k => Math.round(px.canvas[k] * a + px.video[k] * (1 - a)))
+      glyph.push(px)
+    } else if (control.length < MAX && clear(sub, x, y, W)) {
+      px.expect = px.video.slice()
+      control.push(px)
+    }
+  }
+
+  return {
+    dpr: devicePixelRatio,
+    backing: [W, H],
+    canvasAttr: [cw, ch],       // differs from backing when the canvas is worker-owned
+    canvasBox: [+cr.width.toFixed(1), +cr.height.toFixed(1)],
+    playerBox: [+pr.width.toFixed(1), +pr.height.toFixed(1)],
+    litPixels: (() => { let n = 0; for (let i = 3; i < sub.length; i += 4) if (sub[i] > 8) n++; return n })(),
+    interiorFound: glyph.length,
+    glyph,
+    control
+  }
+}
+
+window.__ready = true
+log('ready')
+</script>
+</body>
+</html>
