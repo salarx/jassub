@@ -22,6 +22,8 @@ const BUILD     = params.get('build') || 'patched'
 const VARIANT   = params.get('variant') || 'all'
 const STORM_MS  = +(params.get('storm') || 4000)
 const STEADY_MS = +(params.get('steady') || 3000)
+// see throughput.html: unpinned, the two builds can choose different backing stores
+const MRH       = +(params.get('mrh') || 0)
 
 const log = m => { document.getElementById('log').textContent = m }
 const sleep = ms => new Promise(r => setTimeout(r, ms))
@@ -88,7 +90,8 @@ const instance = new JASSUB({
   timeOffset: 246.38,
   debug: true,
   queryFonts: false,
-  ...opts
+  ...opts,
+  ...(MRH ? { maxRenderHeight: MRH } : {})
 })
 
 

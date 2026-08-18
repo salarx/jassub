@@ -1,5 +1,7 @@
 import { chromium } from 'playwright'
 import { mkdirSync, writeFileSync } from 'node:fs'
+import { dirname, join } from 'node:path'
+import { fileURLToPath } from 'node:url'
 import { printMachine } from './machine.mjs'
 
 // Pixel-identity across every benchmark track, not just beastars.
@@ -20,7 +22,11 @@ const SAMPLES = +(process.env.SAMPLES || 24)
 const SHOTS = process.env.SHOTS === '1'
 const SHOT_EVERY = +(process.env.SHOT_EVERY || 8)
 
-mkdirSync('shots', { recursive: true })
+// anchored to bench/, not the process cwd: run from the repo root these landed in the repo root
+// while the failure message pointed at bench/shots/
+const HERE = dirname(fileURLToPath(import.meta.url))
+const SHOT_DIR = join(HERE, 'shots')
+mkdirSync(SHOT_DIR, { recursive: true })
 await printMachine()
 const browser = await chromium.launch({ channel: 'chrome', headless: false, args: ['--autoplay-policy=no-user-gesture-required'] })
 const results = {}
@@ -45,7 +51,7 @@ for (const track of TRACKS) {
           await window.__i.manualRender({ expectedDisplayTime: performance.now(), width: 1920, height: 1080, mediaTime: t }, true)
           await new Promise(r => setTimeout(r, 150))
         }, t)
-        await page.locator('#c').screenshot({ path: `shots/${track}__${c.label}__t${t.toFixed(2)}.png` })
+        await page.locator('#c').screenshot({ path: join(SHOT_DIR, `${track}__${c.label}__t${t.toFixed(2)}.png`) })
       }
     } catch {
       results[track][c.label] = { frames: null, errors: errs.concat(await page.evaluate(() => window.__s ?? '?').catch(() => '?')) }
@@ -56,7 +62,7 @@ for (const track of TRACKS) {
   }
 }
 await browser.close()
-writeFileSync('matrix.json', JSON.stringify(results, null, 2))
+writeFileSync(join(HERE, 'matrix.json'), JSON.stringify(results, null, 2))
 
 // compare every case against upstream, frame by frame
 console.log('\npixel identity vs upstream (per track)')

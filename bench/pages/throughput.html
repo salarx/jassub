@@ -24,6 +24,9 @@ const WARM   = +(params.get('warm') || 120)
 const RENDERER = params.get('renderer') || 'auto'
 const SIMD = params.get('simd') !== '0'
 const PACKED = params.get('packed') !== '0'
+// pinning the render height is what makes two builds comparable: left free, they can each pick a
+// different backing store and the comparison becomes pixel count, not code
+const MRH = +(params.get('mrh') || 0)
 
 const log = m => { document.getElementById('log').textContent = String(m); window.__s = String(m) }
 window.addEventListener('unhandledrejection', e => log('REJ ' + e.reason))
@@ -47,7 +50,8 @@ const instance = new JASSUB({
   video: v, subUrl: `${A}/subtitles/beastars.ass`, fonts: FONTS,
   timeOffset: 246.38, queryFonts: false, debug: true,
   ...(RENDERER === 'auto' ? {} : { renderer: RENDERER }),
-  packed: PACKED
+  packed: PACKED,
+  ...(MRH ? { maxRenderHeight: MRH } : {})
 })
 window.__i = instance
 await instance.ready

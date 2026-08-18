@@ -31,7 +31,7 @@ for (const c of CASES) {
     const errors = []
     page.on('pageerror', e => errors.push(String(e)))
 
-    await page.goto(`${BASE}?build=${c.build}&variant=${c.variant}`, { waitUntil: 'load' })
+    await page.goto(`${BASE}?build=${c.build}&variant=${c.variant}&mrh=${process.env.MRH || 0}`, { waitUntil: 'load' })
     let res = null
     try {
       await page.waitForFunction(() => window.__RESULT, null, { timeout: 90000 })
@@ -64,3 +64,13 @@ const summarize = rs => {
 
 const table = results.map(r => ({ label: r.label, n: r.runs.length, ...summarize(r.runs) }))
 console.log(JSON.stringify(table, null, 2))
+
+// see throughput.mjs: render times across builds mean nothing unless the builds rasterised the same
+// number of pixels, and the README's own rule for that was documented but never enforced
+const sizes = [...new Set(table.map(t => `${t.storm.backingW}x${t.storm.backingH}`))]
+if (sizes.length > 1) {
+  console.error(`\nRESULT: FAIL - cases rendered at different backing sizes (${sizes.join(' vs ')}).`)
+  console.error('Render times below are pixel counts, not code. Re-run with MRH set, e.g. MRH=540.')
+  console.error('Counts (reconfigures, dropped, worker messages) are still valid - they are not per-pixel.')
+  process.exitCode = 1
+}

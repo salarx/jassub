@@ -13,7 +13,7 @@ for (let r = 0; r < RUNS; r++) {
     const ctx = await browser.newContext({ viewport: { width: 1440, height: 900 }, deviceScaleFactor: 2 })
     const page = await ctx.newPage()
     page.on('pageerror', e => console.error('  PAGEERROR', String(e).slice(0, 160)))
-    await page.goto(`http://localhost:5199/bench/pages/throughput.html?build=${build}&renderer=${renderer}&simd=${simd}`)
+    await page.goto(`http://localhost:5199/bench/pages/throughput.html?build=${build}&renderer=${renderer}&simd=${simd}&mrh=${process.env.MRH || 0}`)
     try {
       await page.waitForFunction(() => window.__RESULT, null, { timeout: 180000 })
       const res = await page.evaluate(() => window.__RESULT)
@@ -37,3 +37,15 @@ console.log(JSON.stringify(Object.fromEntries(Object.entries(byBuild).map(([k, r
   maxMs: +med(rs.map(r => r.maxMs)).toFixed(3),
   missPct: Object.fromEntries(Object.keys(rs[0].missPct).map(k => [k, +med(rs.map(r => r.missPct[k])).toFixed(1)]))
 }])), null, 2))
+
+// The README says "if two cases report different backing sizes, stop - they are not comparable", but
+// nothing enforced it, so a run that compares pixel counts instead of code still printed a tidy table.
+// That is not hypothetical: under a context deviceScaleFactor (which the README mandates) the
+// device-pixel-content-box path reports CSS-sized values, so one build renders a quarter of the pixels
+// of the other and looks four times faster. Pin with MRH to compare builds.
+const sizes = [...new Set(Object.values(byBuild).map(rs => rs[0].backing))]
+if (sizes.length > 1) {
+  console.error(`\nRESULT: FAIL - cases rendered at different backing sizes (${sizes.join(' vs ')}).`)
+  console.error('These numbers compare pixel counts, not code. Re-run with MRH set, e.g. MRH=540.')
+  process.exitCode = 1
+}

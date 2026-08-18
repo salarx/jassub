@@ -40,7 +40,7 @@ for (let r = 0; r < RUNS; r++) {
     const cdp = await ctx.newCDPSession(page)
     await cdp.send('Performance.enable')
 
-    await page.goto(`http://localhost:5199/bench/pages/throughput.html?build=${c.build}&renderer=${c.renderer}&simd=${c.simd}&packed=${c.packed}&warm=120&frames=400`)
+    await page.goto(`http://localhost:5199/bench/pages/throughput.html?build=${c.build}&renderer=${c.renderer}&simd=${c.simd}&packed=${c.packed}&warm=120&frames=400&mrh=${process.env.MRH || 0}`)
     // sample right as measurement begins, so warm-up and asset loading aren't counted
     await page.waitForFunction(() => (window.__s ?? '').includes('measuring'), null, { timeout: 180000 })
     const cpu0 = await procCpu()

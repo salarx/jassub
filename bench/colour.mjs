@@ -18,7 +18,7 @@ const MEDIA_TIMES = [3.35, 3.62, 3.90]
 const grab = async (browser, { build, renderer, packed }, forceSpace) => {
   const ctx = await browser.newContext({ viewport: { width: 1440, height: 900 }, deviceScaleFactor: 2 })
   const page = await ctx.newPage()
-  await page.goto(`http://localhost:5199/bench/pages/throughput.html?build=${build}&renderer=${renderer}&packed=${packed ?? '1'}&frames=1&warm=1`)
+  await page.goto(`http://localhost:5199/bench/pages/throughput.html?build=${build}&renderer=${renderer}&packed=${packed ?? '1'}&frames=1&warm=1&mrh=${process.env.MRH || 0}`)
   await page.waitForFunction(() => window.__RESULT, null, { timeout: 180000 })
 
   const shots = []
