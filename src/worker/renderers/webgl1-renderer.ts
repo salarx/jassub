@@ -240,6 +240,13 @@ export class WebGL1Renderer {
     this.gl.pixelStorei(this.gl.UNPACK_ALIGNMENT, 1)
     this.gl.clearColor(0, 0, 0, 0)
     this.gl.activeTexture(this.gl.TEXTURE0)
+
+    // u_resolution used to be set only when a resize was scheduled, but resizeCanvas() early-returns when the
+    // requested size already matches the canvas, which happens whenever the page sizes the canvas element
+    // itself (canvas-only mode). The uniform then stayed (0,0), the vertex shader divided by zero and nothing
+    // rasterised. Seed it from the canvas here so a render is always well defined.
+    this.gl.viewport(0, 0, canvas.width, canvas.height)
+    this.gl.uniform2f(this.u_resolution, canvas.width, canvas.height)
   }
 
   createShader (type: number, source: string): WebGLShader | null {
