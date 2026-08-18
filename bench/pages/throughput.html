@@ -1,0 +1,102 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <title>JASSUB render throughput</title>
+  <style>
+    body { margin: 0; background: #111; color: #eee; font: 12px ui-monospace, monospace; }
+    #stage { position: relative; width: 1280px; height: 720px; }
+    video { width: 100%; height: 100%; object-fit: contain; display: block; }
+    #log { padding: 10px; white-space: pre; }
+  </style>
+</head>
+<body>
+  <div id="stage"><video id="v" muted playsinline></video></div>
+  <pre id="log">idle</pre>
+<script type="module">
+// Steady-state per-frame render cost at a fixed size, over the densest region of the track
+// (peak 1562 concurrent events at t=250.0s => mediaTime ~3.6s in this clip).
+// This is the benchmark for changes to the per-image path: embind, texture upload, draw batching.
+const params = new URLSearchParams(location.search)
+const BUILD  = params.get('build') || 'patched'
+const FRAMES = +(params.get('frames') || 400)
+const WARM   = +(params.get('warm') || 120)
+const RENDERER = params.get('renderer') || 'auto'
+const SIMD = params.get('simd') !== '0'
+const PACKED = params.get('packed') !== '0'
+
+const log = m => { document.getElementById('log').textContent = String(m); window.__s = String(m) }
+window.addEventListener('unhandledrejection', e => log('REJ ' + e.reason))
+
+const { default: JASSUB } = await import(`../dist/${BUILD}/jassub.js`)
+const A = new URL('../assets', location.href).href
+const FONTS = ['architext.regular.ttf','FRABK.TTF','allison-script.regular.otf','Lato-Regular.ttf','chawp.otf','arial.ttf','SlatePro-Medium.otf']
+  .map(f => `${A}/fonts/${encodeURIComponent(f)}`)
+
+// force the non-SIMD wasm to measure what libass' wasm_simd128 backend actually buys
+if (!SIMD) { JASSUB._test(); JASSUB._supportsSIMD = false }
+
+const v = document.getElementById('v')
+v.src = `${A}/videos/Beastars.mp4`
+await new Promise(r => v.addEventListener('loadedmetadata', r, { once: true }))
+v.pause()
+v.currentTime = 3.6
+await new Promise(r => v.addEventListener('seeked', r, { once: true }))
+
+const instance = new JASSUB({
+  video: v, subUrl: `${A}/subtitles/beastars.ass`, fonts: FONTS,
+  timeOffset: 246.38, queryFonts: false, debug: true,
+  ...(RENDERER === 'auto' ? {} : { renderer: RENDERER }),
+  packed: PACKED
+})
+window.__i = instance
+await instance.ready
+await new Promise(r => setTimeout(r, 2500))   // fonts + first layout settled
+
+// sweep the hot window; repaint forces a real render every call rather than reusing an unchanged frame
+const T0 = 3.20, T1 = 4.20
+const at = i => T0 + (T1 - T0) * ((i % 100) / 100)
+
+const once = async i => {
+  const t = performance.now()
+  await instance.manualRender(
+    { expectedDisplayTime: performance.now(), width: 1920, height: 1080, mediaTime: at(i) },
+    true
+  )
+  return performance.now() - t
+}
+
+log(`build=${BUILD} warming (${WARM})…`)
+for (let i = 0; i < WARM; i++) await once(i)
+
+log(`build=${BUILD} measuring (${FRAMES})…`)
+const samples = []
+for (let i = 0; i < FRAMES; i++) samples.push(await once(i))
+
+samples.sort((a, b) => a - b)
+const q = p => samples[Math.min(samples.length - 1, Math.floor(samples.length * p))]
+const c = document.querySelector('canvas')
+window.__RESULT = {
+  build: BUILD,
+  renderer: RENDERER,
+  simd: SIMD,
+  packed: PACKED,
+  frames: samples.length,
+  backing: `${c.width}x${c.height}`,
+  avgMs: +(samples.reduce((a, b) => a + b, 0) / samples.length).toFixed(3),
+  p50Ms: +q(0.50).toFixed(3),
+  p95Ms: +q(0.95).toFixed(3),
+  p99Ms: +q(0.99).toFixed(3),
+  maxMs: +samples[samples.length - 1].toFixed(3),
+  // jassub renders once per presented video frame, so a higher-fps source just means more renders per
+  // second of the same content - per-render cost is image-count/resolution bound, not fps bound.
+  // repaint is forced on every sample, so this is the worst case where libass can never skip an
+  // unchanged frame.
+  missPct: Object.fromEntries([['23.976', 1000 / 23.976], ['30', 1000 / 30], ['60', 1000 / 60], ['120', 1000 / 120]]
+    .map(([fps, budget]) => [fps + 'fps', +(100 * samples.filter(x => x > budget).length / samples.length).toFixed(1)])),
+  samples: samples.map(x => +x.toFixed(3))
+}
+log(JSON.stringify(window.__RESULT, null, 2))
+</script>
+</body>
+</html>
