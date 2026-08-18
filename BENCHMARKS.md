@@ -93,7 +93,9 @@ transfer between machines; the *ratios* are what this table is for.
 | worker messages | 1619 | **130** |
 | throughput avg @ peak density | 1.52 ms | **1.24 ms** (−18%) |
 | throughput p95 | 2.61 ms | 2.30 ms |
-| storm render avg | **1.37 ms** | 2.93 ms |
+| storm render avg *(per call — see below)* | 1.37 ms | 2.93 ms |
+| storm render calls | 1080 | **126** |
+| **storm render total** | 1477 ms | **369 ms** |
 | dropped frames | **0** | 0–1 |
 
 What survives unchanged is the reconfigure collapse: **956 → 2**, a count no resolution argument touches.
@@ -108,9 +110,16 @@ Two claims above need narrowing, though:
   against this branch's 1120x630, upstream dropped 734 frames with a 1132 ms worst frame and this branch
   dropped none.
 
-Unexplained and worth a look: at equal pixel counts this branch's storm render is **2.1x slower** than
-upstream (2.93 ms vs 1.37 ms). Both sit far inside any frame budget, so it is not a practical problem, but it
-runs opposite to the framing above and has no explanation yet.
+**Read the per-call average with care — it inverts the result.** Taken alone it says this branch is 2.1x
+slower per render (2.93 ms vs 1.37 ms), which is what an earlier draft of this file reported. It is comparing
+means across populations of very different size: upstream issues **1080** render calls during the 4 s storm to
+this branch's **126**, one per resize tick against a freshly reconfigured frame size, and its average is
+diluted by a large number of cheap calls against caches that had just been dumped and only partly refilled.
+
+Aggregate render time is the honest measure, and it moves the other way: **1477 ms → 369 ms, a 75%
+reduction**. Reducing the number of renders is the whole point of the change, so a per-render cost is exactly
+the wrong unit to judge it by. `bench/run.mjs` now reports `totalRenderMs` alongside the average so the trap
+is not re-set for the next reader.
 
 The atlas renderer measured ~75% slower than the array path here (2.67 ms vs 1.24 ms), independently
 reproducing the negative result recorded for change H.

@@ -58,6 +58,10 @@ const summarize = rs => {
   const out = { steady: {}, storm: {} }
   for (const phase of ['steady', 'storm']) {
     for (const k of keys) out[phase][k] = +med(rs.map(r => r[phase][k])).toFixed(3)
+    // avgRenderMs on its own invites the wrong comparison, because the debounce changes how many renders
+    // happen rather than only what each one costs. Upstream can post a lower per-call average while making
+    // ~8x more calls and doing far more total work, which reads as a regression when it is the opposite.
+    out[phase].totalRenderMs = +med(rs.map(r => r[phase].renderCalls * r[phase].avgRenderMs)).toFixed(1)
   }
   return out
 }
