@@ -19,6 +19,7 @@
   ],
   "scripts": {
     "build": "tsc --noCheck",
+    "prepare": "git rev-parse --git-dir >/dev/null 2>&1 && git config core.hooksPath .githooks || true",
     "dev": "vite --host",
     "docker:build": "docker build -t thaunknown/jassub-build .",
     "docker:run": "docker run -it --rm -v ${PWD}:/code --name thaunknown_jassub-build thaunknown/jassub-build:latest"

@@ -1,0 +1,37 @@
+#!/bin/sh
+# Keep submodules in step with the branch.
+#
+# git does not move submodules on checkout, so switching branches silently leaves the
+# working tree on the previous branch's dependency versions and builds keep succeeding
+# against the wrong sources. This syncs them, but refuses to touch a submodule that has
+# uncommitted work rather than throwing it away.
+
+# $3 is 1 for a branch checkout, 0 for a file checkout. Only act on branch switches.
+[ "$3" = "1" ] || exit 0
+
+# nothing to do if every submodule already matches the recorded commit
+# (git submodule status prefixes a line with '+' when it differs, '-' when uninitialised)
+status=$(git submodule status 2>/dev/null) || exit 0
+echo "$status" | grep -q '^[+-]' || exit 0
+
+dirty=""
+for path in $(git config --file .gitmodules --get-regexp '^submodule\..*\.path$' 2>/dev/null | awk '{print $2}'); do
+  [ -d "$path/.git" ] || [ -f "$path/.git" ] || continue
+  # tracked edits only. untracked files are build detritus (autotools configure~, uninitialised
+  # nested submodule dirs) and nested-submodule pointer drift is not user work either.
+  if [ -n "$(git -C "$path" status --porcelain --untracked-files=no --ignore-submodules=all 2>/dev/null)" ]; then
+    dirty="$dirty $path"
+  fi
+done
+
+if [ -n "$dirty" ]; then
+  echo "submodules: NOT syncing, uncommitted changes in:$dirty" >&2
+  echo "submodules: commit or stash there, then run: git submodule update --init --recursive" >&2
+  exit 0
+fi
+
+echo "submodules: syncing to $(git rev-parse --abbrev-ref HEAD)..."
+git submodule update --init --recursive --quiet 2>/dev/null
+git submodule status | while read -r sha path _rest; do
+  printf "  %-14s %s\n" "$path" "$(git -C "$path" describe --tags 2>/dev/null || printf '%.8s' "${sha#[-+]}")"
+done

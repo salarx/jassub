@@ -209,6 +209,25 @@ Support for older browsers (without OffscreenCanvas, WebAssembly threads, etc) h
 
 # How to build?
 
+## Working on this repo
+
+Run `[p]npm install` once. Its `prepare` step points git at the tracked hooks in `.githooks/`:
+
+```shell
+git config core.hooksPath .githooks
+```
+
+That is the whole of it, and you can run that line by hand instead if you would rather not have an install
+script touch your git config.
+
+The hooks keep the submodules in step with the branch after a checkout, merge or rebase. Git does not move
+submodules for you, so switching branches otherwise leaves the tree on the previous branch's dependency
+versions while builds carry on succeeding against the wrong sources - which is easy to miss, because nothing
+reports an error.
+
+They only act on branch switches, stay silent when the submodules already match, and refuse to touch a
+submodule holding uncommitted tracked changes, printing what is in the way instead.
+
 ## Get the Source
 
 Run git clone --recursive https://github.com/ThaUnknown/jassub.git
