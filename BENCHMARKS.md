@@ -42,6 +42,19 @@ host the flag and the page's `devicePixelRatio` disagree, `devicePixelContentBox
 either way, and cases end up rasterizing different pixel counts. Two early rounds of numbers were invalid for
 exactly this reason.
 
+> **Correction — the sentence above is wrong about `devicePixelContentBoxSize`, and it invalidates the
+> comparisons in this file.** Under a context `deviceScaleFactor` it does *not* report physical pixels for
+> this branch: it reports CSS-sized values. Measured directly on Windows at dPR 2, upstream rasterized
+> 2560x1440 while this branch rasterized 1280x720 from the same page — a quarter of the pixels. Under
+> `--force-device-scale-factor=2` both builds agree at 2560x1440, so **real HiDPI displays are unaffected
+> and there is no sharpness regression**; it is the benchmarking method recommended here that breaks, and
+> only for the `device-pixel-content-box` path this branch introduces.
+>
+> Every timing comparison in this file was taken with the affected method and needs re-measuring with the
+> render size pinned (`MRH=540`) before its numbers can be read as code-vs-code. Counts — reconfigures,
+> dropped frames, worker messages — are unaffected, because they are not per-pixel.
+> `bench/throughput.mjs` and `bench/run.mjs` now fail the run when cases rasterize different sizes.
+
 ### Workload
 
 `beastars.ass` — 11,622 dialogue lines, heavy typesetting (`\blur`, `\frz`, `\fax`, `\org`, `\pos`), 7 external
@@ -62,6 +75,45 @@ Steady state (3 s, no resizing) is unchanged to slightly better: 10.29 ms → 7.
 to buy the resize win.
 
 Upstream's 803 ms worst-case frame during a drag is a visible freeze.
+
+> **The two render-time columns in this table are not code-vs-code** — see the correction under
+> Environment. They were taken with the two builds rasterizing different pixel counts. The reconfigure,
+> dropped-frame and worker-message columns are counts and stand as measured. Re-measured with the size
+> pinned, on a second machine, in *Independent re-measurement* below.
+
+### Independent re-measurement (Windows / AMD, render size pinned)
+
+Second machine, `MRH=540` so both builds rasterize 960x540 and the comparison is code-vs-code. Ryzen 7
+7800X3D / RX 7900 GRE, ANGLE D3D11, Chrome 151, dPR 1, baseline `main` @ `2753847`. Absolute times do not
+transfer between machines; the *ratios* are what this table is for.
+
+| metric (median of 3) | upstream | this branch |
+| --- | --- | --- |
+| libass reconfigures (4 s storm) | 956 | **2** |
+| worker messages | 1619 | **130** |
+| throughput avg @ peak density | 1.52 ms | **1.24 ms** (−18%) |
+| throughput p95 | 2.61 ms | 2.30 ms |
+| storm render avg | **1.37 ms** | 2.93 ms |
+| dropped frames | **0** | 0–1 |
+
+What survives unchanged is the reconfigure collapse: **956 → 2**, a count no resolution argument touches.
+
+Two claims above need narrowing, though:
+
+- **The throughput win is ~18%, not 3.2x.** The larger figure came from the unpinned comparison described
+  in the Environment correction, where the two builds rasterized different pixel counts.
+- **The dropped-frame elimination is size-dependent.** At 960x540 upstream drops nothing — its reconfigures
+  are cheap enough at that size that there is no freeze to remove. The 401 → 0 result is real but belongs to
+  large backing stores, not to resizing as such. Unpinned on this machine, where upstream rasterized 2240x1260
+  against this branch's 1120x630, upstream dropped 734 frames with a 1132 ms worst frame and this branch
+  dropped none.
+
+Unexplained and worth a look: at equal pixel counts this branch's storm render is **2.1x slower** than
+upstream (2.93 ms vs 1.37 ms). Both sit far inside any frame budget, so it is not a practical problem, but it
+runs opposite to the framing above and has no explanation yet.
+
+The atlas renderer measured ~75% slower than the array path here (2.67 ms vs 1.24 ms), independently
+reproducing the negative result recorded for change H.
 
 ### Resize ablation (leave-one-out against all-fixes)
 
@@ -177,7 +229,14 @@ rasterizer tile fills — and the Makefile's `SIMD_ARGS` (`-msimd128 -mrelaxed-s
 | upstream | reference | reference |
 | this branch (array) | **bit-identical** | **bit-identical** |
 | atlas renderer | **bit-identical** | **bit-identical** |
-| WebGPU batched | **bit-identical** | **bit-identical** |
+| WebGPU batched | **bit-identical** | bit-identical on Apple Silicon; see note |
+
+**"Bit-identical" for WebGPU does not hold on every GPU.** On Windows / AMD RX 7900 GRE (ANGLE D3D11,
+Chrome 151) the batched WebGPU backend differs from upstream under a forced BT709→BT601 matrix at
+mediaTime 3.62 and 3.90, and on the `kusriya` track in the identity-matrix pixel sweep. The magnitude is
+**one pixel, one channel, a delta of 1/255** — a rounding difference in the WebGPU path, with identical
+lit-pixel counts and zero mean RGBA delta. It is invisible in use and not worth chasing, but the claim
+should read "bit-identical on the hardware tested" rather than unconditionally.
 
 The WebGPU renderer initially rendered incorrectly (missing backgrounds and left-hand glyphs) and its first
 benchmark was therefore meaningless — it was fast because it was drawing less. `writeTexture`/`writeBuffer`
