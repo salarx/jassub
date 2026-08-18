@@ -64,6 +64,8 @@ static void applyStyleCommonFields(ASS_Style &style, emscripten::val obj) {
   v = read("Justify");                          if (!v.isUndefined()) style.Justify = v.as<int>();
 }
 
+#define IMAGE_FIELDS 7
+
 class JASSUB {
 private:
   ASS_Library *ass_library;
@@ -74,6 +76,13 @@ private:
 
   const char *defaultFont;
 
+  // Packed frame metadata, reused across frames. rawRender used to build a JS array of JS objects through
+  // embind - seven obj.set() calls plus a push per ASS_Image, several hundred images on a typeset frame,
+  // so thousands of boundary crossings and JS allocations every frame in the GC-hot path.
+  // This writes the same fields into a flat int32 block that JS reads through one Int32Array view.
+  int *img_buf;
+  int img_buf_cap;
+
 public:
   ASS_Track *track;
 
@@ -81,6 +90,8 @@ public:
   JASSUB(int canvas_w, int canvas_h, emscripten::val df) {
     ass_library = NULL;
     ass_renderer = NULL;
+    img_buf = NULL;
+    img_buf_cap = 0;
     track = NULL;
     this->canvas_w = canvas_w;
     this->canvas_h = canvas_h;
@@ -133,6 +144,42 @@ public:
     ass_set_frame_size(ass_renderer, canvas_w, canvas_h);
     this->canvas_h = canvas_h;
     this->canvas_w = canvas_w;
+  }
+
+  // Returns the number of images written into the packed buffer, 0 for an empty frame, or -1 when the frame
+  // is unchanged and a repaint wasn't forced (the caller should keep what's on screen).
+  // Field order per image: w, h, dst_x, dst_y, stride, color, bitmap. Kept interleaved rather than split
+  // per field because the renderer reads all seven together for each image.
+  int rawRenderPacked(double tm, int force) {
+    int changed = 0;
+    ASS_Image *imgs = ass_render_frame(ass_renderer, track, (long long)(tm * 1e+3 + 0.5), &changed);
+    if (imgs == NULL) return (changed == 0 && !force) ? -1 : 0;
+
+    int n = 0;
+    for (ASS_Image *img = imgs; img; img = img->next) n++;
+
+    if (n > img_buf_cap) {
+      free(img_buf);
+      img_buf_cap = n * 2;
+      img_buf = (int *)malloc((size_t)img_buf_cap * IMAGE_FIELDS * sizeof(int));
+      if (!img_buf) { img_buf_cap = 0; return 0; }
+    }
+
+    int *p = img_buf;
+    for (ASS_Image *img = imgs; img; img = img->next) {
+      *p++ = img->w;
+      *p++ = img->h;
+      *p++ = img->dst_x;
+      *p++ = img->dst_y;
+      *p++ = img->stride;
+      *p++ = (int)img->color;
+      *p++ = (int)(uintptr_t)img->bitmap;
+    }
+    return n;
+  }
+
+  uintptr_t getImageBuffer() {
+    return (uintptr_t)img_buf;
   }
 
   emscripten::val rawRender(double tm, int force) {
@@ -220,6 +267,9 @@ public:
 
   void quitLibrary() {
     removeTrack();
+    free(img_buf);
+    img_buf = NULL;
+    img_buf_cap = 0;
     ass_renderer_done(ass_renderer);
     ass_library_done(ass_library);
   }
@@ -348,6 +398,8 @@ EMSCRIPTEN_BINDINGS(JASSUB) {
     .function("processData", &JASSUB::processData)
     .function("processChunk", &JASSUB::processChunk)
     .function("rawRender", &JASSUB::rawRender)
+    .function("rawRenderPacked", &JASSUB::rawRenderPacked)
+    .function("getImageBuffer", &JASSUB::getImageBuffer)
     .function("styleOverride", &JASSUB::styleOverride)
     .function("disableStyleOverride", &JASSUB::disableStyleOverride)
     .function("setDefaultFont", &JASSUB::setDefaultFont)
