@@ -79,9 +79,10 @@ $(DIST_DIR)/lib/libbrotlicommon.a: $(BUILD_LIB_DIR)/brotli/configured
 	cd $(BUILD_LIB_DIR)/brotli && \
 	$(call CONFIGURE_CMAKE) -DBROTLI_DISABLE_TESTS=ON && \
 	$(JASSUB_MAKE) install
-	# Normalise static lib names
+	# Normalise static lib names. Brotli >=1.1 installs libbrotli*.a directly, so the glob can match
+	# nothing; skip missing entries instead of letting mv fail the build.
 	cd $(DIST_DIR)/lib/ && \
-	for lib in *-static.a ; do mv "$$lib" "$${lib%-static.a}.a" ; done
+	for lib in *-static.a ; do [ -e "$$lib" ] || continue ; mv "$$lib" "$${lib%-static.a}.a" ; done
 
 
 # Freetype without Harfbuzz
@@ -104,6 +105,14 @@ $(BUILD_LIB_DIR)/freetype/build_hb/dist_hb/lib/libfreetype.a: $(DIST_DIR)/lib/li
 		$(JASSUB_MAKE) install
 
 # Harfbuzz
+# hb.hh promotes ~40 warnings to hard errors via #pragma GCC diagnostic error. Newer clang (emsdk 6.0.4)
+# emits some of them on harfbuzz's own code, which breaks the build outright. HB_NO_PRAGMA_GCC_DIAGNOSTIC_ERROR
+# is harfbuzz's own documented escape hatch for this, and only affects warning severity, not codegen.
+$(DIST_DIR)/lib/libharfbuzz.a: CFLAGS += -DHB_NO_PRAGMA_GCC_DIAGNOSTIC_ERROR
+$(DIST_DIR)/lib/libharfbuzz.a: CXXFLAGS += -DHB_NO_PRAGMA_GCC_DIAGNOSTIC_ERROR
+$(BUILD_LIB_DIR)/harfbuzz/configure: CFLAGS += -DHB_NO_PRAGMA_GCC_DIAGNOSTIC_ERROR
+$(BUILD_LIB_DIR)/harfbuzz/configure: CXXFLAGS += -DHB_NO_PRAGMA_GCC_DIAGNOSTIC_ERROR
+
 $(BUILD_LIB_DIR)/harfbuzz/configure: lib/harfbuzz $(wildcard $(BASE_DIR)build/patches/harfbuzz/*.patch)
 	$(call PREPARE_SRC_PATCHED,harfbuzz)
 	cd $(BUILD_LIB_DIR)/harfbuzz && $(RECONF_AUTO)
@@ -211,7 +220,10 @@ COMPAT_ARGS = \
 		-s DEFAULT_LIBRARY_FUNCS_TO_INCLUDE='["$$stringToNewUTF8"]' \
 		-mbulk-memory
 
-src/wasm/$(WORKER_NAME).js: src/JASSUB.cpp src/worker/pre-worker.js src/worker/extern-pre-worker.js
+# LIBASS_DEPS belongs here: without it, rebuilding any static library (a submodule bump, a patch change)
+# leaves the previously linked wasm in place and make reports success, so the output silently does not
+# contain the libraries that were just built.
+src/wasm/$(WORKER_NAME).js: src/JASSUB.cpp src/worker/pre-worker.js src/worker/extern-pre-worker.js $(LIBASS_DEPS)
 	mkdir -p src/wasm
 	emcc src/JASSUB.cpp $(LIBASS_DEPS) \
 		$(WORKER_ARGS) \
