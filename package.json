@@ -1,7 +1,7 @@
 {
-  "name": "jassub",
+  "name": "webass",
   "version": "2.5.14",
-  "description": "The Fastest JavaScript SSA/ASS Subtitle Renderer For Browsers",
+  "description": "ASS/SSA subtitle renderer for browsers. libass compiled to WebAssembly, GPU-accelerated with WebGPU and WebGL2.",
   "main": "dist/jassub.js",
   "type": "module",
   "files": [
@@ -25,26 +25,34 @@
   },
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/ThaUnknown/jassub.git"
+    "url": "git+https://github.com/salarx/webASS.git"
   },
   "keywords": [
-    "libass",
+    "subtitles",
     "subtitle",
+    "subtitle-renderer",
+    "ass",
+    "ssa",
+    "ass-subtitles",
+    "libass",
+    "webassembly",
     "wasm",
     "emscripten",
-    "ASS",
-    "WebAssembly",
-    "subtitles",
     "webgpu",
     "webgl2",
-    "typescript"
+    "html5-video",
+    "video",
+    "video-player",
+    "offscreencanvas",
+    "typescript",
+    "aegisub"
   ],
   "author": "ThaUnknown",
   "license": "LGPL-2.1-or-later AND (FTL OR GPL-2.0-or-later) AND MIT AND MIT-Modern-Variant AND ISC AND NTP AND Zlib AND BSL-1.0",
   "bugs": {
-    "url": "https://github.com/ThaUnknown/jassub/issues"
+    "url": "https://github.com/salarx/webASS/issues"
   },
-  "homepage": "https://github.com/ThaUnknown/jassub",
+  "homepage": "https://github.com/salarx/webASS",
   "dependencies": {
     "abslink": "^1.2.2",
     "lfa-ponyfill": "^1.1.0",

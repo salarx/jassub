@@ -22,7 +22,7 @@ export const webYCbCrMap = {
   smpte170m: 'BT601'// alias BT.601 NTSC... whats the difference?
 } as const
 
-export type JASSUBOptions = {
+export type WebASSOptions = {
   timeOffset?: number
   debug?: boolean
   prescaleFactor?: number
@@ -72,7 +72,7 @@ export type JASSUBOptions = {
   subContent: string
 })
 
-export default class JASSUB {
+export default class WebASS {
   timeOffset
   prescaleFactor
   prescaleHeightLimit
@@ -119,18 +119,18 @@ export default class JASSUB {
   _lastDemandTime!: Pick<VideoFrameCallbackMetadata, 'expectedDisplayTime' | 'width' | 'height' | 'mediaTime'>
   _skipped = false
   _worker
-  constructor (opts: JASSUBOptions) {
+  constructor (opts: WebASSOptions) {
     if (!globalThis.Worker) throw new Error('Worker not supported')
     if (!opts) throw new Error('No options provided')
     if (!opts.video && !opts.canvas) throw new Error('You should give video or canvas in options.')
 
-    JASSUB._test()
+    WebASS._test()
 
     this.timeOffset = opts.timeOffset ?? 0
     this._video = opts.video
     this._canvas = opts.canvas ?? document.createElement('canvas')
     if (this._video && !opts.canvas) {
-      this._canvas.className = 'JASSUB'
+      this._canvas.className = 'webass JASSUB'
       this._canvas.style.position = 'absolute'
       this._canvas.style.pointerEvents = 'none'
 
@@ -166,7 +166,7 @@ export default class JASSUB {
 
     this.ready = new Renderer(
       {
-        wasmUrl: JASSUB._supportsSIMD ? modern : normal,
+        wasmUrl: WebASS._supportsSIMD ? modern : normal,
         width: ctrl.width,
         height: ctrl.height,
         subUrl: opts.subUrl,
@@ -209,10 +209,10 @@ export default class JASSUB {
   static _supportsSIMD?: boolean
 
   static _test () {
-    if (JASSUB._supportsSIMD != null) return
+    if (WebASS._supportsSIMD != null) return
 
     try {
-      JASSUB._supportsSIMD = WebAssembly.validate(Uint8Array.of(
+      WebASS._supportsSIMD = WebAssembly.validate(Uint8Array.of(
         // WASM magic number + version 1
         0x00, 0x61, 0x73, 0x6d, 0x01, 0x00, 0x00, 0x00,
         // Type section: 1 type, func () -> v128
@@ -235,7 +235,7 @@ export default class JASSUB {
         0x0b
       ))
     } catch (e) {
-      JASSUB._supportsSIMD = false
+      WebASS._supportsSIMD = false
     }
 
     const module = new WebAssembly.Module(Uint8Array.of(0x0, 0x61, 0x73, 0x6d, 0x01, 0x00, 0x00, 0x00))
@@ -562,3 +562,8 @@ export default class JASSUB {
     this._worker.terminate()
   }
 }
+
+/** @deprecated renamed to WebASS; kept so existing imports keep working */
+export { WebASS as JASSUB }
+/** @deprecated renamed to WebASSOptions */
+export type JASSUBOptions = WebASSOptions

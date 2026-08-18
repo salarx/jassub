@@ -1,14 +1,25 @@
-<h1 align="center">
-  JASSUB
-</h1>
+<h1 align="center">webASS</h1>
 <p align="center">
-  The Fastest JavaScript SSA/ASS Subtitle Renderer For Browsers.
+  <b>ASS/SSA subtitle renderer for browsers.</b><br>
+  libass compiled to WebAssembly, GPU-accelerated with WebGPU and WebGL2.
 </p>
-JASSUB is a JS wrapper for <a href="https://github.com/libass/libass">libass</a>, which renders <a href="https://en.wikipedia.org/wiki/SubStation_Alpha">SSA/ASS subtitles</a> directly in your browser. It uses Emscripten to compile libass' C++ code to WASM, and WebGL for hardware acceleration.
+
+webASS renders <a href="https://en.wikipedia.org/wiki/SubStation_Alpha">SSA/ASS subtitles</a> in the browser
+with full fidelity: karaoke, typesetting, transforms, blur, clipping and embedded fonts. It compiles
+<a href="https://github.com/libass/libass">libass</a> to WebAssembly with Emscripten and composites the result
+on the GPU, so subtitles stay in sync with HTML5 video without touching the DOM.
+
+Search terms this project covers: ASS subtitles JavaScript, SSA subtitle renderer, libass WebAssembly,
+browser subtitle rendering, HTML5 video subtitles, Aegisub typesetting playback, karaoke subtitles web.
 
 <p align="center">
   <a href="https://jassub.pages.dev" target="_blank">Demo</a>
-</h1>
+</p>
+
+> **Fork notice.** webASS is a fork of [JASSUB](https://github.com/ThaUnknown/jassub) by
+> [ThaUnknown](https://github.com/ThaUnknown), which remains the upstream project and the original work.
+> This fork adds resize, renderer and build changes measured in [BENCHMARKS.md](BENCHMARKS.md).
+> Licensing is unchanged; see [LICENSE](LICENSE).
 
 ## Features
 
@@ -38,7 +49,7 @@ The
 
 headers are recommended to use this library, as it uses SharedArrayBuffer for multi-threading, but if you can't set them, it will fallback automatically to work in single-threaded mode. Firefox doesn't support threading so they are not required there.
 
-At minimum WASM + TextDecoder + OffscreenCanvas + Web Workers + Proxy + Fetch + Promise + getVideoPlaybackQuality/requestVideoFrameCallback are required for JASSUB to work.
+At minimum WASM + TextDecoder + OffscreenCanvas + Web Workers + Proxy + Fetch + Promise + getVideoPlaybackQuality/requestVideoFrameCallback are required for webASS to work.
 
 <!-- 
 WASM:              57 11 52    /  51 11 47
@@ -55,7 +66,7 @@ getVPQ/rVFC:       80 8 42     /  28 8 42
 -msign-ext         69 14 62
 -->
 
-JASSUB supports Chrome/Safari/Firefox 80/17/105, you bring the support down to 67/16.2/68 if you enable some flags/settings in your browser for these features. For other engines polyfills might be needed. Babel is also recommended if you need to support older JS engines as JASSUB ships as ES modules with modern syntax.
+webASS supports Chrome/Safari/Firefox 80/17/105, you bring the support down to 67/16.2/68 if you enable some flags/settings in your browser for these features. For other engines polyfills might be needed. Babel is also recommended if you need to support older JS engines as webASS ships as ES modules with modern syntax.
 
 <!-- See https://github.com/gpuweb/gpuweb/wiki/Implementation-Status for a WebGPU support table, and what flags you might need to enable it in your browser if you want to utilise it instead of WebGL2. -->
 
@@ -64,13 +75,13 @@ JASSUB supports Chrome/Safari/Firefox 80/17/105, you bring the support down to 6
 Install the library via:
 
 ```shell
-[p]npm i jassub
+[p]npm i webass
 ```
 
 ```js
-import JASSUB from 'jassub'
+import WebASS from 'webass'
 
-const instance = new JASSUB({
+const instance = new WebASS({
   video: document.querySelector('video'),
   subUrl: './tracks/sub.ass'
 })
@@ -79,15 +90,15 @@ const instance = new JASSUB({
 If you use a custom bundler, and need to override the worker and wasm URLs you can instead do:
 
 ```js
-import JASSUB from 'jassub'
-import workerUrl from 'jassub/dist/jassub-worker.js?worker&url'
-import wasmUrl from 'jassub/dist/jassub-worker.wasm?url' // non-SIMD fallback
-import modernWasmUrl from 'jassub/dist/jassub-worker-modern.wasm?url' // SIMD
+import WebASS from 'webass'
+import workerUrl from 'webass/dist/jassub-worker.js?worker&url'
+import wasmUrl from 'webass/dist/jassub-worker.wasm?url' // non-SIMD fallback
+import modernWasmUrl from 'webass/dist/jassub-worker-modern.wasm?url' // SIMD
 
-const instance = new JASSUB({
+const instance = new WebASS({
   video: document.querySelector('video'),
   subContent: subtitleString,
-  workerUrl, // you can also use: `new URL('jassub/dist/jassub-worker.js', import.meta.url)` instead of importing it as an url, or whatever solution suits you
+  workerUrl, // you can also use: `new URL('webass/dist/jassub-worker.js', import.meta.url)` instead of importing it as an url, or whatever solution suits you
   wasmUrl,
   modernWasmUrl
 })
@@ -100,9 +111,9 @@ However this shoud almost never be necessary.
 You're also able to use it without any video. However, that requires you to set the time the subtitles should render at yourself:
 
 ```js
-import JASSUB from 'jassub'
+import WebASS from 'webass'
 
-const instance = new JASSUB({
+const instance = new WebASS({
   canvas: document.querySelector('canvas'),
   subUrl: './tracks/sub.ass'
 })
@@ -135,10 +146,10 @@ Example usage can be found in the demo source [here](https://github.com/ThaUnkno
 
 ## Understanding font management
 
-If you know for sure that your subtitles use specific fonts, you can pre-load them via the `fonts` option when creating the JASSUB instance:
+If you know for sure that your subtitles use specific fonts, you can pre-load them via the `fonts` option when creating the webASS instance:
 
 ```js
-const instance = new JASSUB({
+const instance = new WebASS({
   video: document.querySelector('video'),
   subUrl: './tracks/sub.ass', 
   fonts: [new URL('./fonts/GandhiSans-Regular.woff', import.meta.url).href, new Uint8Array(data)]
@@ -150,7 +161,7 @@ This will load/fetch the fonts ASAP when the renderer and WASM is initiated, thi
 If you however have a very big database of fonts and/or you're unsure if your subtitles use, or you want to conserve memory, bandwidth etc you can define fonts via `availableFonts`, which is a case-insensitive, postscript-insensitive map of fonts and their sources. This means the keys can, but don't need to include the weight of the font, but it is preferred. For example:
 
 ```js
-const instance = new JASSUB({
+const instance = new WebASS({
   video: document.querySelector('video'),
   subUrl: './tracks/sub.ass',
   availableFonts: {
@@ -161,18 +172,18 @@ const instance = new JASSUB({
 })
 ```
 
-When JASSUB then needs one of these fonts for immediate rendering it will load the font from the given source, however this can cause a [flash of unstyled text](https://css-tricks.com/fout-foit-foft/) if the default font was previously loaded, as the font is being loaded asynchronously, which looks something like this:
+When webASS then needs one of these fonts for immediate rendering it will load the font from the given source, however this can cause a [flash of unstyled text](https://css-tricks.com/fout-foit-foft/) if the default font was previously loaded, as the font is being loaded asynchronously, which looks something like this:
 
 <img src='./docs/fout.gif'>
 
 With complex typesetting this might not just be text, but glyphs, icons etc. If the default font wasn't previously loaded and wasn't pre-loaded a FOUT won't happen!, and nothing will render for at most a few frames as the font is being downloaded from the given URL.
 
-The above also applies to the default font, you can pre-load it via fonts\[], or use availableFonts. If you use `await instance.renderer.setDefaultFont('Gandhi Sans')` and wish to preload it, you should do so manually via `await instance.renderer.addFonts(['Gandhi Sans'])`, however this is not recommended as it can cause FOUTs as explained above. JASSUB defines and provides a default font so configuring one is not strictly necessary.
+The above also applies to the default font, you can pre-load it via fonts\[], or use availableFonts. If you use `await instance.renderer.setDefaultFont('Gandhi Sans')` and wish to preload it, you should do so manually via `await instance.renderer.addFonts(['Gandhi Sans'])`, however this is not recommended as it can cause FOUTs as explained above. webASS defines and provides a default font so configuring one is not strictly necessary.
 
 For the best user experience, which avoids FOUTs, while using as little memory/bandwidth as possible, you should use a config in the lines of:
 
 ```js
-const instance = new JASSUB({
+const instance = new WebASS({
   fonts: fileAttachments // extracted file attachments for the given video, for example MKV's attachments
   availableFonts: {
     'My Fallback Font Family Name': './fonts/MyFallbackFont.woff2' // or new URL(...).href, only necessary if you want a custom default font, don't include this in fonts[]!
@@ -184,10 +195,10 @@ const instance = new JASSUB({
 
 ## About finding fonts online
 
-By default, JASSUB will only use embedded, constructor defined and local fonts. However, if you want to enable online font finding, you can do so by setting the `queryFonts` option to `'localandremote'` when creating the JASSUB instance, note that this loads 50+ KB of code:
+By default, webASS will only use embedded, constructor defined and local fonts. However, if you want to enable online font finding, you can do so by setting the `queryFonts` option to `'localandremote'` when creating the webASS instance, note that this loads 50+ KB of code:
 
 ```js
-const instance = new JASSUB({
+const instance = new WebASS({
   video: document.querySelector('video'),
   subUrl: './tracks/sub.ass',
   queryFonts: 'localandremote'
@@ -202,7 +213,7 @@ Note that Google Fonts doesn't include a lot of non-free fonts such as Arial, so
 If you want to support even older engines, then please check the [v1.8.8 tag](https://github.com/ThaUnknown/jassub/releases/tag/1.8.8), or install it via:
 
 ```shell
-[p]npm i jassub@1.8.8
+[p]npm i webass@1.8.8
 ```
 
 Support for older browsers (without OffscreenCanvas, WebAssembly threads, etc) has been dropped in v2.0.0 and later.

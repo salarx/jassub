@@ -28,7 +28,7 @@ Upstream (no branch changes) reproduces it. `prescaleFactor: 2` is the easiest w
 1920x1080 render size from a 960x540 CSS box:
 
 ```js
-// renders            -> 567 lit pixels at t=5
+// upstream JASSUB, unmodified. renders -> 567 lit pixels at t=5
 new JASSUB({ canvas, subUrl: 'box.ass' })
 // renders nothing at t=5
 new JASSUB({ canvas, subUrl: 'box.ass', prescaleFactor: 2 })
