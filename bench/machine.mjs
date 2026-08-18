@@ -6,6 +6,7 @@
 import { execSync } from 'node:child_process'
 import { chromium } from 'playwright'
 import os from 'node:os'
+import { pathToFileURL } from 'node:url'
 
 const BENCH_ORIGIN = process.env.BENCH_ORIGIN || 'http://localhost:5199'
 
@@ -28,10 +29,13 @@ export const machineInfo = async () => {
 
   // browser-side facts: the renderer string is what actually decides GPU behaviour
   try {
-    // headless is fine here: this only reads capability strings, it measures nothing.
-    // it also keeps a browser window from appearing, and from parking on an error page.
-    const b = await chromium.launch({ channel: 'chrome', headless: true })
-    const p = await (await b.newContext()).newPage()
+    // Headed, and with no viewport override, because two of these fields describe the display rather
+    // than the browser. Headless Chrome synthesises a 1280x720 screen at dPR 1 regardless of the
+    // hardware, so a headless probe reports the same numbers on every machine — the opposite of what
+    // a fingerprint is for, and worse than omitting them, since they look like measurements.
+    // The window is kept small and short-lived; every runner opens a headed Chrome anyway.
+    const b = await chromium.launch({ channel: 'chrome', headless: false, args: ['--window-size=360,240'] })
+    const p = await (await b.newContext({ viewport: null })).newPage()
     // navigator.gpu needs a real origin, not about:blank. use a page the server actually has.
     await p.goto(`${BENCH_ORIGIN}/bench/pages/throughput.html`, { waitUntil: 'commit' }).catch(() => {})
     Object.assign(info, await p.evaluate(() => {
@@ -62,4 +66,6 @@ export const printMachine = async () => {
   return m
 }
 
-if (import.meta.url === `file://${process.argv[1]}`) await printMachine()
+// pathToFileURL, not string concatenation: on Windows argv[1] is a drive path (F:\...) and never
+// matches a hand-built file:// URL, so running this file directly printed nothing at all
+if (import.meta.url === pathToFileURL(process.argv[1]).href) await printMachine()

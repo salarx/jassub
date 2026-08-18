@@ -18,7 +18,7 @@ const SUITES = [
   { name: 'throughput', script: 'throughput.mjs', kind: 'numbers', what: 'per-frame render cost, deadline-miss rate at 24/30/60/120fps' },
   { name: 'resize', script: 'run.mjs', kind: 'numbers', what: 'libass reconfigures, dropped frames, worker RPCs, render time' },
   { name: 'resource', script: 'resource.mjs', kind: 'numbers', what: 'CPU per process, JS heap' },
-  { name: 'fullscreen', script: 'fullscreen.mjs', kind: 'numbers', what: 'alignment, reconfigures, drops across enter/exit' },
+  { name: 'fullscreen', script: 'fullscreen.mjs', kind: 'check', what: 'alignment across element fullscreen, display takeover and display moves' },
   { name: 'colour', script: 'colour.mjs', kind: 'check', what: 'colour-matrix and premultiplied-alpha output' },
   { name: 'matrix', script: 'matrix.mjs', kind: 'check', what: 'pixel identity across all tracks and backends' }
 ]
@@ -52,8 +52,8 @@ for (const r of results) {
   const verdict = r.kind === 'check' ? (r.status === 'ok' ? 'PASS' : 'FAIL') : (r.status === 'ok' ? 'measured' : r.status)
   console.log(`  ${r.name.padEnd(12)} ${String(r.kind).padEnd(8)} ${verdict.padEnd(10)} ${r.seconds}s`)
 }
-const failed = results.filter(r => r.kind === 'check' && r.status !== 'ok')
-console.log(failed.length ? `\n${failed.length} check(s) FAILED` : '\nall checks passed')
+const failed = results.filter(r => r.status !== 'ok')
+console.log(failed.length ? `\n${failed.length} runner(s) FAILED: ${failed.map(r => r.name).join(', ')}` : '\nall runners passed')
 console.log('\nquote the machine block above with any numbers you report.')
 writeFileSync(join(HERE, 'last-run.json'), JSON.stringify({ machine, results }, null, 2))
 process.exitCode = failed.length ? 1 : 0

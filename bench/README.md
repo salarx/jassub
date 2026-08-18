@@ -32,9 +32,38 @@ Assets (~45 MB of the upstream demo's own video, subtitles and fonts) are fetche
 | `matrix.mjs` | pixel identity across all six tracks × renderer backends, plus screenshots |
 | `colour.mjs` | colour-matrix and premultiplied-alpha correctness, identity and forced BT601 |
 | `resource.mjs` | CPU per process (renderer / GPU / browser) and JS heap |
-| `fullscreen.mjs` | Fullscreen API enter/exit, alignment and reconfigure counts |
+| `fullscreen.mjs` | element fullscreen, OS-level display takeover, and moves across attached displays |
 
 Useful env vars: `RUNS` (repetitions, default 3), `CASES` (which builds/renderers), `TRACKS`, `MRH`.
+
+## Fullscreen and multiple displays
+
+`fullscreen.mjs` needs no human. It runs three legs, because the layout code sees three different
+things:
+
+| leg | what it does | how |
+| --- | --- | --- |
+| element | Fullscreen API inside an ordinary window — the element grows, the window does not | trusted click on `#go` |
+| display | the browser window takes over the display: chrome goes to 0, `inner` becomes the display | CDP `Browser.setWindowBounds`, `windowState: 'fullscreen'` |
+| displays | the window is moved onto every attached display, entering fullscreen on each | CDP `Browser.setWindowBounds` with screen coordinates |
+
+Playwright's launch flags cannot produce the display leg on their own: it sizes the window over CDP
+after launch, which undoes `--start-fullscreen`. Driving `Browser.setWindowBounds` directly is what
+makes a real display takeover reproducible rather than something checked by hand.
+
+The display list comes from the Window Management API, so there is no OS-specific enumeration.
+`getScreenDetails()` prompts unless the permission is already granted, and a prompt is a human in the
+loop — so the runner pre-grants it over CDP (`Browser.setPermission`, falling back through the older
+`window-placement` spelling and the `Browser.grantPermissions` enum). It prints the resulting
+permission state, and warns loudly if it is still `prompt`.
+
+**The cross-display leg needs two or more displays attached.** With one it prints the display it found
+and skips that leg — it does not fail, and it does not silently pretend to have tested a display
+change. If the attached displays all share a `devicePixelRatio`, the runner says so: the window move is
+exercised, but the backing-store change that makes a drag interesting is not.
+
+Verdict is mechanical: every phase that reports `fullscreen: true` must have the canvas on the video's
+content box within a pixel, or the runner exits non-zero.
 
 ## Things that will silently give you wrong numbers
 

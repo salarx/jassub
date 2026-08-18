@@ -27,7 +27,7 @@ const FONTS = [
 ]
 
 const sh = (cmd, args, opts = {}) =>
-  execFileSync(cmd, args, { cwd: ROOT, stdio: 'inherit', ...opts })
+  execFileSync(cmd, args, { cwd: ROOT, stdio: 'inherit', shell: process.platform === 'win32', ...opts })
 
 const fetchTo = async (url, dest) => {
   if (existsSync(dest) && statSync(dest).size > 2048) return false
