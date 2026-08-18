@@ -1,4 +1,3 @@
-/* eslint-disable camelcase */
 import { finalizer } from 'abslink'
 import { expose } from 'abslink/w3c'
 import { queryRemoteFonts } from 'lfa-ponyfill'
@@ -7,7 +6,9 @@ import WASM from '../wasm/jassub-worker.js'
 
 import { Canvas2DRenderer } from './renderers/2d-renderer.ts'
 import { WebGL1Renderer } from './renderers/webgl1-renderer.ts'
+import { WebGL2AtlasRenderer } from './renderers/webgl2-atlas-renderer.ts'
 import { WebGL2Renderer } from './renderers/webgl2-renderer.ts'
+import { WebGPUBatchedRenderer } from './renderers/webgpu-batched-renderer.ts'
 import { _fetch, fetchtext, LIBASS_YCBCR_MAP, THREAD_COUNT, WEIGHT_MAP, type ASSEvent, type ASSImage, type ASSStyle, type WeightValue } from './util.ts'
 
 import type { JASSUB, MainModule } from '../wasm/types.d.ts'
@@ -32,18 +33,22 @@ interface opts {
   libassMemoryLimit: number
   libassGlyphLimit: number
   queryFonts: 'local' | 'localandremote' | false
+  renderer?: 'auto' | 'webgl2' | 'webgl2-atlas' | 'webgpu' | 'webgl1' | 'canvas2d'
+  packed?: boolean
 }
 
 const constructor = Symbol.for('constructor')
+const EMPTY_META = new Int32Array(0)
 
 export class ASSRenderer {
   _wasm!: JASSUB
   _subtitleColorSpace?: 'BT601' | 'BT709' | 'SMPTE240M' | 'FCC' | null
   _videoColorSpace?: 'BT709' | 'BT601'
   _malloc!: (size: number) => number
-  _gpurender!: WebGL2Renderer | WebGL1Renderer | Canvas2DRenderer
+  _gpurender!: WebGL2Renderer | WebGL2AtlasRenderer | WebGPUBatchedRenderer | WebGL1Renderer | Canvas2DRenderer
 
   debug = false
+  _packed = true
 
   constructor (...args: [data: opts, getFont: (font: string, weight: WeightValue) => Promise<Uint8Array<ArrayBuffer> | undefined>, ctrl: OffscreenCanvas]) {
     return this[constructor](...args).catch(console.error) as unknown as this
@@ -52,6 +57,7 @@ export class ASSRenderer {
   async [constructor] (data: opts, getFont: (font: string, weight: WeightValue) => Promise<Uint8Array<ArrayBuffer> | undefined>, ctrl: OffscreenCanvas) {
     // remove case sensitivity
     this._availableFonts = Object.fromEntries(Object.entries(data.availableFonts).map(([k, v]) => [k.trim().toLowerCase(), v]))
+    this._packed = data.packed !== false
     this.debug = data.debug
     this.queryFonts = data.queryFonts
     this._getFont = getFont
@@ -66,8 +72,15 @@ export class ASSRenderer {
     // }).then(adapter => adapter?.requestDevice())
     try {
       const testCanvas = new OffscreenCanvas(1, 1)
-      if (testCanvas.getContext('webgl2')) {
-        this._gpurender = new WebGL2Renderer()
+      const forced = data.renderer && data.renderer !== 'auto' ? data.renderer : null
+      if (forced === 'webgpu') {
+        this._gpurender = new WebGPUBatchedRenderer()
+      } else if (forced === 'canvas2d') {
+        this._gpurender = new Canvas2DRenderer()
+      } else if (forced === 'webgl1') {
+        this._gpurender = new WebGL1Renderer()
+      } else if (testCanvas.getContext('webgl2')) {
+        this._gpurender = forced === 'webgl2-atlas' ? new WebGL2AtlasRenderer() : new WebGL2Renderer()
       } else {
         this._gpurender = testCanvas.getContext('webgl')?.getExtension('ANGLE_instanced_arrays') ? new WebGL1Renderer() : new Canvas2DRenderer()
       }
@@ -76,6 +89,13 @@ export class ASSRenderer {
     }
 
     this._gpurender.setCanvas(ctrl)
+
+    // The track fetch, the WASM instantiation and the font downloads are all independent, but used to run
+    // strictly in series, so time to first subtitle was their sum. Start the track download now and await it
+    // at the point it's actually needed. The catch here only suppresses an unhandled-rejection warning in the
+    // gap before that await - awaiting the promise below still throws.
+    const trackContent = data.subContent != null ? Promise.resolve(data.subContent) : fetchtext(data.subUrl!)
+    trackContent.catch(() => {})
 
     this._loadedInitialFonts = !data.fonts.length
     // eslint-disable-next-line @typescript-eslint/unbound-method
@@ -89,7 +109,7 @@ export class ASSRenderer {
 
     if (!this._loadedInitialFonts) await this._loadInitialFonts(data.fonts)
 
-    this._wasm.createTrackMem(data.subContent ?? await fetchtext(data.subUrl!))
+    this._wasm.createTrackMem(await trackContent)
 
     this._subtitleColorSpace = LIBASS_YCBCR_MAP[this._wasm.trackColorSpace]
 
@@ -294,10 +314,22 @@ export class ASSRenderer {
   }
 
   _draw (time: number, repaint = false) {
+    const renderer = this._gpurender
+    if (this._packed && 'renderPacked' in renderer) {
+      // packed path: one Int32Array view over the whole frame instead of an object per ASS_Image
+      const count = this._wasm.rawRenderPacked(time, Number(repaint))
+      if (count < 0) return
+      const meta = count
+        ? new Int32Array(self.WASMMEMORY.buffer, this._wasm.getImageBuffer(), count * 7)
+        : EMPTY_META
+      renderer.renderPacked(meta, count, self.HEAPU8RAW)
+      return
+    }
+
     const images = this._wasm.rawRender(time, Number(repaint)) as ASSImage[] | null
     if (!images) return
 
-    this._gpurender.render(images, self.HEAPU8RAW)
+    renderer.render(images, self.HEAPU8RAW)
   }
 
   _setColorSpace (videoColorSpace: 'RGB' | 'BT709' | 'BT601') {

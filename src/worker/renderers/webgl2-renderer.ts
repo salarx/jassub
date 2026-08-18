@@ -233,6 +233,13 @@ export class WebGL2Renderer {
     this.gl.clearColor(0, 0, 0, 0)
     this.gl.activeTexture(this.gl.TEXTURE0)
 
+    // u_resolution used to be set only when a resize was scheduled, but resizeCanvas() early-returns when the
+    // requested size already matches the canvas, which happens whenever the page sizes the canvas element
+    // itself (canvas-only mode). The uniform then stayed (0,0), the vertex shader divided by zero and nothing
+    // rasterised. Seed it from the canvas here so a render is always well defined.
+    this.gl.viewport(0, 0, canvas.width, canvas.height)
+    this.gl.uniform2f(this.u_resolution, canvas.width, canvas.height)
+
     // Create initial texture array
     this.createTexArray(TEX_INITIAL_SIZE, TEX_INITIAL_SIZE)
   }
@@ -413,6 +420,94 @@ export class WebGL2Renderer {
       this.gl.bufferData(this.gl.ARRAY_BUFFER, this.instanceTexLayerData.subarray(0, instanceCount), this.gl.DYNAMIC_DRAW)
 
       // Single instanced draw call
+      this.gl.drawArraysInstanced(this.gl.TRIANGLES, 0, 6, instanceCount)
+    }
+  }
+
+  // Same work as render(), reading the packed int32 block written by JASSUB::rawRenderPacked instead of an
+  // array of JS objects. Field order per image: w, h, dst_x, dst_y, stride, color, bitmap.
+  renderPacked (meta: Int32Array, count: number, heap: Uint8Array): void {
+    if (!this.gl || !this.program || !this.vao || !this.texArray) return
+
+    if ((self.HEAPU8RAW.buffer !== self.WASMMEMORY.buffer) || SHOULD_REFERENCE_MEMORY) {
+      heap = self.HEAPU8RAW = new Uint8Array(self.WASMMEMORY.buffer)
+    }
+
+    if (this._scheduledResize) {
+      const { width, height } = this._scheduledResize
+      this._scheduledResize = undefined
+      this.canvas!.width = width
+      this.canvas!.height = height
+      this.gl.viewport(0, 0, width, height)
+      this.gl.uniform2f(this.u_resolution, width, height)
+    } else {
+      this.gl.clear(this.gl.COLOR_BUFFER_BIT)
+    }
+
+    let maxW = this.texArrayWidth
+    let maxH = this.texArrayHeight
+    let valid = 0
+    for (let i = 0; i < count; i++) {
+      const o = i * 7
+      const w = meta[o]!
+      const h = meta[o + 1]!
+      if (w <= 0 || h <= 0) continue
+      valid++
+      if (w > maxW) maxW = w
+      if (h > maxH) maxH = h
+    }
+    if (!valid) return
+
+    if (maxW > this.texArrayWidth || maxH > this.texArrayHeight) this.createTexArray(maxW, maxH)
+
+    const batchSize = Math.min(TEX_ARRAY_SIZE, MAX_INSTANCES)
+    let i = 0
+    while (i < count) {
+      let instanceCount = 0
+
+      while (i < count && instanceCount < batchSize) {
+        const o = i * 7
+        i++
+        const w = meta[o]!
+        const h = meta[o + 1]!
+        if (w <= 0 || h <= 0) continue
+
+        const stride = meta[o + 4]!
+        const bitmap = meta[o + 6]!
+        const layer = instanceCount
+
+        this.gl.pixelStorei(this.gl.UNPACK_ROW_LENGTH, stride)
+        if (IS_FIREFOX || IS_SAFARI) {
+          const sourceView = new Uint8Array(heap.buffer, bitmap, stride * h)
+          this.gl.texSubImage3D(this.gl.TEXTURE_2D_ARRAY, 0, 0, 0, layer, w, h, 1, this.gl.RED, this.gl.UNSIGNED_BYTE, new Uint8Array(sourceView))
+        } else {
+          this.gl.texSubImage3D(this.gl.TEXTURE_2D_ARRAY, 0, 0, 0, layer, w, h, 1, this.gl.RED, this.gl.UNSIGNED_BYTE, heap, bitmap)
+        }
+
+        const color = meta[o + 5]!
+        const idx = instanceCount * 4
+        this.instanceDestRectData[idx] = meta[o + 2]!
+        this.instanceDestRectData[idx + 1] = meta[o + 3]!
+        this.instanceDestRectData[idx + 2] = w
+        this.instanceDestRectData[idx + 3] = h
+        this.instanceColorData[idx] = ((color >>> 24) & 0xFF) / 255
+        this.instanceColorData[idx + 1] = ((color >>> 16) & 0xFF) / 255
+        this.instanceColorData[idx + 2] = ((color >>> 8) & 0xFF) / 255
+        this.instanceColorData[idx + 3] = (color & 0xFF) / 255
+        this.instanceTexLayerData[instanceCount] = layer
+        instanceCount++
+      }
+
+      this.gl.pixelStorei(this.gl.UNPACK_ROW_LENGTH, 0)
+      if (instanceCount === 0) continue
+
+      this.gl.bindBuffer(this.gl.ARRAY_BUFFER, this.instanceDestRectBuffer)
+      this.gl.bufferData(this.gl.ARRAY_BUFFER, this.instanceDestRectData.subarray(0, instanceCount * 4), this.gl.DYNAMIC_DRAW)
+      this.gl.bindBuffer(this.gl.ARRAY_BUFFER, this.instanceColorBuffer)
+      this.gl.bufferData(this.gl.ARRAY_BUFFER, this.instanceColorData.subarray(0, instanceCount * 4), this.gl.DYNAMIC_DRAW)
+      this.gl.bindBuffer(this.gl.ARRAY_BUFFER, this.instanceTexLayerBuffer)
+      this.gl.bufferData(this.gl.ARRAY_BUFFER, this.instanceTexLayerData.subarray(0, instanceCount), this.gl.DYNAMIC_DRAW)
+
       this.gl.drawArraysInstanced(this.gl.TRIANGLES, 0, 6, instanceCount)
     }
   }
