@@ -37,6 +37,27 @@ export type JASSUBOptions = {
   queryFonts?: 'local' | 'localandremote' | false
   libassMemoryLimit?: number
   libassGlyphLimit?: number
+  /** ms of no resize activity before the render resolution is committed to libass. 0 disables debouncing. default 150 */
+  resizeSettleMs?: number
+  /**
+   * device-pixel granularity the committed render height snaps to, so a drag keeps reusing libass' caches.
+   * only worth setting alongside resizeSettleMs: 0 - with the debounce on it just adds a second reconfigure
+   * when the exact size lands, so it defaults off. default 0
+   */
+  resizeQuantum?: number
+  /**
+   * relative change in the observed box above which the debounce is skipped and the new render resolution is
+   * committed at once. a drag moves the box a little per frame; an orientation change, a fullscreen toggle or a
+   * layout switch moves it a long way in one step and shouldn't spend the debounce showing an upscaled frame.
+   * 0 disables. default 0.25
+   */
+  resizeJumpRatio?: number
+  /** force a specific renderer backend instead of auto-detecting. default 'auto' */
+  renderer?: 'auto' | 'webgl2' | 'webgl2-atlas' | 'webgpu' | 'webgl1' | 'canvas2d'
+  /** use the packed int32 frame-metadata path instead of per-image embind objects. default true */
+  packed?: boolean
+  /** benchmark-only ablation switches, not public API */
+  _perf?: { entryBox?: boolean, coalesce?: boolean, dedupeStyle?: boolean }
 } & ({
   video: HTMLVideoElement
   canvas?: HTMLCanvasElement
@@ -65,10 +86,34 @@ export default class JASSUB {
   _videoHeight = 0
   _videoColorSpace: string | null = null
   _canvas
-  _ro = new ResizeObserver(async () => {
-    await this.ready
-    this.resize()
-  })
+  // Resize is split in two:
+  // - the display box (CSS) follows every observer tick, and is pure style writes: no RPC, no libass, no GL.
+  //   the compositor scales the existing canvas backing store for us, for free, on the GPU.
+  // - the render resolution (canvas backing store + ass_set_frame_size) is debounced to when resizing settles,
+  //   because changing libass' frame size dumps its glyph and bitmap caches and re-rasterizes the whole frame.
+  _ro = new ResizeObserver(entries => this._onResizeEntry(entries[entries.length - 1]!))
+  _boxWidth = 0 // device px, drives the render resolution
+  _boxHeight = 0
+  _cssWidth = 0 // CSS px, drives the overlay's position and size
+  _cssHeight = 0
+  _settleTimer?: ReturnType<typeof setTimeout>
+  _exactTimer?: ReturnType<typeof setTimeout>
+  _committedWidth = 0
+  _committedHeight = 0
+  _committedStorageWidth = 0
+  _committedStorageHeight = 0
+  _commitInFlight = false
+  _commitQueued: false | 'quantized' | 'exact' = false
+  _styleWidth = ''
+  _styleHeight = ''
+  _styleTop = ''
+  _styleLeft = ''
+  resizeSettleMs
+  resizeQuantum
+  resizeJumpRatio
+  _committedBoxWidth = 0
+  _committedBoxHeight = 0
+  _perf = { entryBox: true, coalesce: true, dedupeStyle: true }
 
   _destroyed = false
   _lastDemandTime!: Pick<VideoFrameCallbackMetadata, 'expectedDisplayTime' | 'width' | 'height' | 'mediaTime'>
@@ -99,6 +144,10 @@ export default class JASSUB {
     this.prescaleFactor = opts.prescaleFactor ?? 1.0
     this.prescaleHeightLimit = opts.prescaleHeightLimit ?? 1080
     this.maxRenderHeight = opts.maxRenderHeight ?? 0 // 0 - no limit.
+    this.resizeSettleMs = opts.resizeSettleMs ?? 150
+    this.resizeQuantum = opts.resizeQuantum ?? 0
+    this.resizeJumpRatio = opts.resizeJumpRatio ?? 0.25
+    if (opts._perf) Object.assign(this._perf, opts._perf)
 
     // yes this is awful, but bundlers check for new Worker(new URL()) patterns, so can't use new Worker(workerUrl ?? new URL(...)) ... bruh
     this._worker = opts.workerUrl
@@ -128,7 +177,9 @@ export default class JASSUB {
         debug: !!opts.debug,
         libassMemoryLimit: opts.libassMemoryLimit ?? 0,
         libassGlyphLimit: opts.libassGlyphLimit ?? 0,
-        queryFonts: opts.queryFonts ?? 'local'
+        queryFonts: opts.queryFonts ?? 'local',
+        renderer: opts.renderer ?? 'auto',
+        packed: opts.packed ?? true
       },
       proxy(font => this._getLocalFont(font)),
       transfer(ctrl, [ctrl])
@@ -139,7 +190,19 @@ export default class JASSUB {
     if (this._video) {
       this.setVideo(this._video)
     } else {
-      this._ro.observe(this._canvas)
+      this._observe(this._canvas)
+    }
+  }
+
+  // device-pixel-content-box reports the exact backing-store size the compositor will use, which removes both the
+  // clientWidth/clientHeight reads and the devicePixelRatio guess (the latter is wrong on fractional-DPI displays
+  // and when a window straddles two monitors). Safari doesn't support the option and throws, so fall back.
+  _observe (el: Element) {
+    if (!this._perf.entryBox) { this._ro.observe(el); return }
+    try {
+      this._ro.observe(el, { box: 'device-pixel-content-box' })
+    } catch {
+      this._ro.observe(el)
     }
   }
 
@@ -179,63 +242,203 @@ export default class JASSUB {
     if (!(module instanceof WebAssembly.Module) || !(new WebAssembly.Instance(module) instanceof WebAssembly.Instance)) throw new Error('WASM not supported')
   }
 
-  async resize (forceRepaint = !!this._video?.paused, renderWidth = 0, renderHeight = 0) {
+  // Called for every observer tick. Does the cheap half of a resize only: the CSS box.
+  // The canvas keeps its current backing store, so the compositor scales what is already rendered until
+  // _commitRenderResolution catches up. Deliberately does no measuring - every number comes from the entry.
+  _onResizeEntry (entry: ResizeObserverEntry) {
+    if (!this._perf.entryBox) {
+      // ablation: the old path, which measures the element instead of trusting the entry
+      this._readBoxFromLayout()
+    } else {
+      // Take each box from the entry in its own units and never convert between them.
+      // devicePixelContentBoxSize is true device pixels, and devicePixelRatio is not reliably its ratio to
+      // the CSS box (fractional DPI, a window straddling two monitors, a forced device scale factor), so
+      // dividing one by the other silently mis-sizes the overlay and misaligns every subtitle.
+      const cssBox = entry.contentBoxSize?.[0]
+      this._cssWidth = cssBox ? cssBox.inlineSize : entry.contentRect.width
+      this._cssHeight = cssBox ? cssBox.blockSize : entry.contentRect.height
+
+      const dpBox = entry.devicePixelContentBoxSize?.[0]
+      const ratio = self.devicePixelRatio || 1
+      this._boxWidth = dpBox ? dpBox.inlineSize : this._cssWidth * ratio
+      this._boxHeight = dpBox ? dpBox.blockSize : this._cssHeight * ratio
+    }
+    if (!this._boxWidth || !this._boxHeight || !this._cssWidth || !this._cssHeight) return
+
+    this._applyDisplayBox()
+
+    // a jump this large is a discrete layout change, not a drag - don't make it wait out the debounce
+    if (this.resizeJumpRatio > 0 && this._committedBoxHeight > 0 && this._committedBoxWidth > 0) {
+      const dh = Math.abs(this._boxHeight - this._committedBoxHeight) / this._committedBoxHeight
+      const dw = Math.abs(this._boxWidth - this._committedBoxWidth) / this._committedBoxWidth
+      if (Math.max(dh, dw) > this.resizeJumpRatio) {
+        clearTimeout(this._settleTimer)
+        clearTimeout(this._exactTimer)
+        this._commitRenderResolution(true).catch(console.error)
+        return
+      }
+    }
+
+    if (!this.resizeSettleMs) {
+      this._commitRenderResolution(false).catch(console.error)
+      return
+    }
+
+    clearTimeout(this._settleTimer)
+    clearTimeout(this._exactTimer)
+    // first pass snaps to the quantum so a drag that pauses briefly reuses libass' caches...
+    this._settleTimer = setTimeout(() => { this._commitRenderResolution(false).catch(console.error) }, this.resizeSettleMs)
+    // ...then once it's properly idle, take the exact size so the quantum never costs any sharpness
+    this._exactTimer = setTimeout(() => { this._commitRenderResolution(true).catch(console.error) }, this.resizeSettleMs * 4)
+  }
+
+  // Style writes only, and only when a value actually changed - an unchanged assignment still dirties style.
+  _applyDisplayBox () {
+    if (!this._video) return
+
+    const boxW = this._cssWidth
+    const boxH = this._cssHeight
+
+    const videoWidth = this._video.videoWidth || this._videoWidth
+    const videoHeight = this._video.videoHeight || this._videoHeight
+    if (!videoWidth || !videoHeight) return
+
+    const { x, y, width, height } = this._letterbox(boxW, boxH, videoWidth / videoHeight)
+
+    // offsetLeft/offsetTop are the one thing the entry can't give us. This runs inside a ResizeObserver
+    // callback, which is dispatched after layout, so these are cached reads rather than forced reflow.
+    const style = this._canvas.style
+    const w = Math.round(width) + 'px'
+    const h = Math.round(height) + 'px'
+    const top = (this._video.offsetTop + y) + 'px'
+    const left = (this._video.offsetLeft + x) + 'px'
+
+    const dedupe = this._perf.dedupeStyle
+    if (!dedupe || this._styleWidth !== w) style.width = this._styleWidth = w
+    if (!dedupe || this._styleHeight !== h) style.height = this._styleHeight = h
+    if (!dedupe || this._styleTop !== top) style.top = this._styleTop = top
+    if (!dedupe || this._styleLeft !== left) style.left = this._styleLeft = left
+  }
+
+  // The expensive half: ass_set_frame_size dumps libass' glyph + bitmap caches, so it runs once per settle
+  // instead of once per observer tick. Coalesced - a tick landing mid-flight replaces the queued commit.
+  async _commitRenderResolution (exact: boolean) {
+    if (this._destroyed) return
+    if (this._commitInFlight && this._perf.coalesce) {
+      this._commitQueued = exact ? 'exact' : 'quantized'
+      return
+    }
+
     const videoWidth = this._video?.videoWidth ?? this._videoWidth
     const videoHeight = this._video?.videoHeight ?? this._videoHeight
-    const videoSize = this._getElementBoundingBox(this._video ?? this._canvas, videoWidth, videoHeight)
 
-    if (!renderWidth || !renderHeight) {
-      // || 1 for divide by zero safety
-      const widthScale = (this._videoWidth / videoWidth) || 1
-      const heightScale = (this._videoHeight / videoHeight) || 1
+    // device pixels from here on
+    let boxW = this._boxWidth
+    let boxH = this._boxHeight
+    if (this._video && videoWidth && videoHeight) {
+      const box = this._letterbox(boxW, boxH, videoWidth / videoHeight)
+      boxW = box.width
+      boxH = box.height
+    }
+    if (!boxW || !boxH) return
 
-      const { width, height } = this._computeRenderSize(videoSize.width * widthScale, videoSize.height * heightScale)
-      renderWidth = Math.round(width)
-      renderHeight = Math.round(height)
+    // || 1 for divide by zero safety
+    const widthScale = (this._videoWidth / videoWidth) || 1
+    const heightScale = (this._videoHeight / videoHeight) || 1
+
+    const { width, height } = this._computeRenderSize(boxW * widthScale, boxH * heightScale, exact)
+    const renderWidth = Math.round(width)
+    const renderHeight = Math.round(height)
+    if (!renderWidth || !renderHeight) return
+
+    // the whole point of the quantum: most ticks of a drag resolve to a size libass is already configured for.
+    // the video dims are part of the identity because _resizeCanvas also feeds ass_set_storage_size.
+    const storageWidth = this._videoWidth || renderWidth
+    const storageHeight = this._videoHeight || renderHeight
+    if (renderWidth === this._committedWidth && renderHeight === this._committedHeight &&
+        storageWidth === this._committedStorageWidth && storageHeight === this._committedStorageHeight) return
+
+    this._commitInFlight = true
+    this._committedWidth = renderWidth
+    this._committedHeight = renderHeight
+    this._committedStorageWidth = storageWidth
+    this._committedStorageHeight = storageHeight
+    this._committedBoxWidth = this._boxWidth
+    this._committedBoxHeight = this._boxHeight
+    try {
+      await this.ready
+      await this.renderer._resizeCanvas(
+        renderWidth,
+        renderHeight,
+        this._videoWidth || renderWidth,
+        this._videoHeight || renderHeight
+      )
+      if (this._lastDemandTime) await this._demandRender(!!this._video?.paused)
+    } finally {
+      this._commitInFlight = false
     }
 
-    if (this._video) {
-      this._canvas.style.width = Math.round(videoSize.width) + 'px'
-      this._canvas.style.height = Math.round(videoSize.height) + 'px'
-      this._canvas.style.top = videoSize.y + 'px'
-      this._canvas.style.left = videoSize.x + 'px'
+    const queued = this._commitQueued
+    if (queued) {
+      this._commitQueued = false
+      await this._commitRenderResolution(queued === 'exact')
     }
-
-    await this.renderer._resizeCanvas(
-      renderWidth,
-      renderHeight,
-      this._videoWidth || renderWidth,
-      this._videoHeight || renderHeight
-    )
-
-    if (this._lastDemandTime) await this._demandRender(forceRepaint)
   }
 
-  _getElementBoundingBox (el: HTMLElement, videoWidth: number, videoHeight: number) {
-    const { clientWidth, clientHeight, offsetLeft, offsetTop } = el
+  async resize (forceRepaint = !!this._video?.paused, renderWidth = 0, renderHeight = 0) {
+    await this.ready
+    if (renderWidth && renderHeight) {
+      this._committedWidth = renderWidth
+      this._committedHeight = renderHeight
+      await this.renderer._resizeCanvas(
+        renderWidth,
+        renderHeight,
+        this._videoWidth || renderWidth,
+        this._videoHeight || renderHeight
+      )
+      if (this._lastDemandTime) await this._demandRender(forceRepaint)
+      return
+    }
 
-    const videoRatio = videoWidth / videoHeight
-    const elementRatio = clientWidth / clientHeight
+    // explicit resize() calls bypass the debounce and take the exact size
+    clearTimeout(this._settleTimer)
+    clearTimeout(this._exactTimer)
+    if (!this._boxWidth || !this._boxHeight || !this._cssWidth || !this._cssHeight) this._readBoxFromLayout()
+    this._applyDisplayBox()
+    await this._commitRenderResolution(true)
+  }
 
-    if (elementRatio > videoRatio) {
-      videoHeight = clientHeight
-      videoWidth = clientHeight * videoRatio
+  // only used when resize() is called before any observer tick has landed
+  _readBoxFromLayout () {
+    const el = this._video ?? this._canvas
+    const ratio = self.devicePixelRatio || 1
+    this._cssWidth = el.clientWidth
+    this._cssHeight = el.clientHeight
+    this._boxWidth = this._cssWidth * ratio
+    this._boxHeight = this._cssHeight * ratio
+  }
+
+  _letterbox (boxWidth: number, boxHeight: number, videoRatio: number) {
+    let width = boxWidth
+    let height = boxHeight
+    if (boxWidth / boxHeight > videoRatio) {
+      width = boxHeight * videoRatio
     } else {
-      videoHeight = clientWidth / videoRatio
-      videoWidth = clientWidth
+      height = boxWidth / videoRatio
     }
 
-    return { x: offsetLeft + (clientWidth - videoWidth) / 2, y: offsetTop + (clientHeight - videoHeight) / 2, width: videoWidth, height: videoHeight }
+    return { x: (boxWidth - width) / 2, y: (boxHeight - height) / 2, width, height }
   }
 
-  _computeRenderSize (width = 0, height = 0) {
+  // takes and returns device pixels - the caller already resolved devicePixelRatio, exactly when the browser
+  // gave us a device-pixel-content-box
+  _computeRenderSize (width = 0, height = 0, exact = false) {
     if (height <= 0 || width <= 0) return { width: 0, height: 0 }
 
     const scalefactor = this.prescaleFactor <= 0 ? 1.0 : this.prescaleFactor
-    const ratio = self.devicePixelRatio || 1
 
     const sgn = scalefactor < 1 ? -1 : 1
-    let newH = height * ratio
+    let newH = height
     if (sgn * newH * scalefactor <= sgn * this.prescaleHeightLimit) {
       newH *= scalefactor
     } else if (sgn * newH < sgn * this.prescaleHeightLimit) {
@@ -243,6 +446,12 @@ export default class JASSUB {
     }
 
     if (this.maxRenderHeight > 0 && newH > this.maxRenderHeight) newH = this.maxRenderHeight
+
+    // snap the height to a ladder so successive frames of a drag keep resolving to a size libass is already
+    // configured for, which keeps its glyph and bitmap caches warm instead of flushing them every step
+    if (!exact && this.resizeQuantum > 0) {
+      newH = Math.max(this.resizeQuantum, Math.round(newH / this.resizeQuantum) * this.resizeQuantum)
+    }
 
     width *= newH / height
     height = newH
@@ -253,7 +462,7 @@ export default class JASSUB {
   async setVideo (target: HTMLVideoElement) {
     this._removeListeners()
     this._video = target
-    this._ro.observe(target)
+    this._observe(target)
     if (typeof VideoFrame !== 'undefined') {
       target.addEventListener('loadedmetadata', this._boundUpdateColorSpace)
       this._updateColorSpace({ target })
@@ -337,6 +546,8 @@ export default class JASSUB {
   }
 
   _removeListeners () {
+    clearTimeout(this._settleTimer)
+    clearTimeout(this._exactTimer)
     this._ro.disconnect()
     this._video?.removeEventListener('loadedmetadata', this._boundUpdateColorSpace)
   }
