@@ -12,14 +12,4 @@ dist/*
 src/wasm/jassub-worker-modern.js
 .svelte-kit/
 
-# benchmark artefacts, not sources
-bench/dist/
-bench/assets/
-bench/shots/
-bench/.wt-*
-bench/last-run.json
 package-lock.json
-bench/colour.json
-colour.json
-bench/matrix.json
-matrix.json
