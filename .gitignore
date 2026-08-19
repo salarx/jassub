@@ -11,3 +11,5 @@ test
 dist/*
 src/wasm/jassub-worker-modern.js
 .svelte-kit/
+
+package-lock.json
