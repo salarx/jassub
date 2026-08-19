@@ -54,6 +54,7 @@ for (let r = 0; r < RUNS; r++) {
     const d = (a, b, k) => +(((b[k] ?? 0) - (a[k] ?? 0))).toFixed(3)
     out.push({
       label: c.label,
+      backing: res.backing,
       avgMs: res.avgMs,
       miss120: res.missPct['120fps'],
       cpuRendererS: d(cpu0, cpu1, 'renderer'),
@@ -63,7 +64,7 @@ for (let r = 0; r < RUNS; r++) {
       scriptDurationS: d(m0, m1, 'ScriptDuration'),
       jsHeapMB: +((m1.JSHeapUsedSize ?? 0) / 1048576).toFixed(2)
     })
-    console.error(`  ${c.label} run ${r + 1}: cpuR=${out.at(-1).cpuRendererS}s cpuGPU=${out.at(-1).cpuGpuS}s heap=${out.at(-1).jsHeapMB}MB`)
+    console.error(`  ${c.label} run ${r + 1}: cpuR=${out.at(-1).cpuRendererS}s cpuGPU=${out.at(-1).cpuGpuS}s heap=${out.at(-1).jsHeapMB}MB ${res.backing}`)
     await ctx.close()
   }
 }
@@ -74,5 +75,14 @@ const by = {}
 for (const r of out) (by[r.label] ??= []).push(r)
 const keys = ['avgMs', 'miss120', 'cpuRendererS', 'cpuGpuS', 'cpuBrowserS', 'taskDurationS', 'scriptDurationS', 'jsHeapMB']
 console.log(JSON.stringify(Object.fromEntries(Object.entries(by).map(([k, rs]) =>
-  [k, Object.fromEntries(keys.map(m => [m, +med(rs.map(r => r[m])).toFixed(3)]))]
+  [k, { backing: rs[0].backing, ...Object.fromEntries(keys.map(m => [m, +med(rs.map(r => r[m])).toFixed(3)])) }]
 )), null, 2))
+
+// Same guard the timing runners carry. CPU and heap compared across different pixel counts is the bug that
+// once turned a real ~18% win into a reported 3.2x; refuse to print a comparison that cannot mean anything.
+const sizes = [...new Set(Object.values(by).map(rs => rs[0].backing))]
+if (sizes.length > 1) {
+  console.error(`\nRESULT: FAIL - cases rendered at different backing sizes (${sizes.join(' vs ')}).`)
+  console.error('These resource numbers compare pixel counts, not code. Re-run with MRH set, e.g. MRH=540.')
+  process.exitCode = 1
+}
