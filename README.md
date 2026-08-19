@@ -207,13 +207,6 @@ If you want to support even older engines, then please check the [v1.8.8 tag](ht
 
 Support for older browsers (without OffscreenCanvas, WebAssembly threads, etc) has been dropped in v2.0.0 and later.
 
-# Benchmarks
-
-Performance and correctness are measured by a separate harness:
-[salarx/jassub-bench](https://github.com/salarx/jassub-bench). It builds two refs of this repo and compares
-them — per-frame render cost and deadline-miss rate at 24/30/60/120 fps, resize cost, CPU and heap, plus
-pixel-identity, colour and fullscreen-alignment checks.
-
 # How to build?
 
 ## Get the Source
