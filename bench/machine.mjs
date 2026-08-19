@@ -25,6 +25,11 @@ export const machineInfo = async () => {
     info.gpu = quiet("system_profiler SPDisplaysDataType 2>/dev/null | awk -F': ' '/Chipset Model/{print $2; exit}'")
   } else if (process.platform === 'linux') {
     info.gpu = quiet("lspci 2>/dev/null | grep -i 'vga\\|3d' | head -1 | cut -d: -f3-")
+  } else if (process.platform === 'win32') {
+    // CIM rather than the deprecated wmic, which is absent from recent Windows builds.
+    const ps = q => quiet(`powershell -NoProfile -Command "${q}"`)
+    info.model = ps('(Get-CimInstance Win32_ComputerSystem).Model')
+    info.gpu = ps('(Get-CimInstance Win32_VideoController | Select-Object -First 1).Name')
   }
 
   // browser-side facts: the renderer string is what actually decides GPU behaviour

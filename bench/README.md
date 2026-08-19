@@ -15,6 +15,18 @@ npx vite --port 5199 --strictPort &     # must be this server: it sets the COOP/
 node bench/throughput.mjs               # or any runner below
 ```
 
+Everything above is plain Node and runs the same on Windows — no WSL, no container. The one difference is
+that `&` does not background a command in PowerShell, so start the server in its own terminal:
+
+```powershell
+Start-Process npx -ArgumentList 'vite','--port','5199','--strictPort'
+node bench/prepare.mjs
+node bench/all.mjs
+```
+
+Numbers from a Windows host are not comparable with numbers from a mac — different GPU, driver and
+compositor. Compare cases within one machine's run, and quote that machine's fingerprint.
+
 `prepare.mjs` builds two trees into `bench/dist/`:
 
 - `patched` — your current `HEAD`
