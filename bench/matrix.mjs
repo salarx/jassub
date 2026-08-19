@@ -17,6 +17,9 @@ const CASES = [
   { label: 'branch-atlas', build: 'patched', renderer: 'webgl2-atlas', packed: '1' }
 ]
 const SAMPLES = +(process.env.SAMPLES || 24)
+// Same trap the other runners warn about: unpinned, the builds can rasterise at different resolutions and
+// every frame reads as a mismatch. Here it turns a passing check into a false failure, so say so loudly.
+if (!process.env.MRH) console.error('MRH is not set: builds may rasterise at different sizes and every frame will "differ". Re-run with MRH=540.')
 // screenshots are the one part here that needs a human to judge, so they are opt-in.
 // the hash comparison below is fully mechanical and is what decides pass/fail.
 const SHOTS = process.env.SHOTS === '1'

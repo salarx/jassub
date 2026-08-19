@@ -20,8 +20,14 @@ const SUITES = [
   { name: 'resource', script: 'resource.mjs', kind: 'numbers', what: 'CPU per process, JS heap' },
   { name: 'fullscreen', script: 'fullscreen.mjs', kind: 'check', what: 'alignment across element fullscreen, display takeover and display moves' },
   { name: 'colour', script: 'colour.mjs', kind: 'check', what: 'colour-matrix and premultiplied-alpha output' },
-  { name: 'matrix', script: 'matrix.mjs', kind: 'check', what: 'pixel identity across all tracks and backends' }
+  { name: 'matrix', script: 'matrix.mjs', kind: 'check', what: 'pixel identity across all tracks and backends', mrh: '540' }
 ]
+
+// `matrix` compares pixels, so both builds must rasterise at the same size or every frame reads as a
+// mismatch — it is pinned. The numeric suites are deliberately left at their natural resolution: pinning
+// them to 540p drops the workload to ~1.4 ms/frame, far under the 8.3 ms budget at 120 fps, and the
+// deadline-miss metric stops discriminating between builds. Those runners print each case's backing size,
+// so a genuine size divergence is visible rather than silent.
 
 const only = (process.env.ONLY ?? '').split(',').filter(Boolean)
 const suites = only.length ? SUITES.filter(s => only.includes(s.name)) : SUITES
@@ -38,7 +44,8 @@ const results = []
 for (const s of suites) {
   console.log(`\n${'='.repeat(70)}\n${s.name} — ${s.what}\n${'='.repeat(70)}`)
   const started = Date.now()
-  const r = spawnSync(process.execPath, [join(HERE, s.script)], { stdio: 'inherit', env: process.env })
+  const env = s.mrh ? { ...process.env, MRH: process.env.MRH ?? s.mrh } : process.env
+  const r = spawnSync(process.execPath, [join(HERE, s.script)], { stdio: 'inherit', env })
   results.push({
     name: s.name,
     kind: s.kind,

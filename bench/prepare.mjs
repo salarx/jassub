@@ -52,7 +52,8 @@ const getAssets = async () => {
   console.log(got ? `assets: ${got} fetched` : 'assets: already present')
 }
 
-// Build a given git ref into bench/dist/<label>. Upstream main becomes the baseline to compare against.
+// Build a given git ref into bench/dist/<label>. The upstream commit this work branched from becomes
+// the baseline to compare against.
 const buildRef = (ref, label) => {
   const out = join(DIST, label)
   rmSync(out, { recursive: true, force: true })
@@ -64,8 +65,9 @@ const buildRef = (ref, label) => {
   if (!isHead) {
     console.log(`\n[${label}] worktree at ${ref}`)
     sh('git', ['worktree', 'add', '--detach', '--force', wt, ref])
-    // the wasm binaries are committed, so no emsdk toolchain is needed just to benchmark
-    sh('git', ['submodule', 'update', '--init'], { cwd: wt })
+    // Submodules are deliberately not initialised: tsconfig only includes `src`, and the wasm binaries
+    // are committed, so nothing here compiles libass. Cloning them costs minutes on a fresh machine and
+    // buys the benchmark nothing.
   }
 
   console.log(`[${label}] tsc`)
@@ -80,10 +82,15 @@ const buildRef = (ref, label) => {
   console.log(`[${label}] -> bench/dist/${label}`)
 }
 
+// The last upstream commit before this work. Pinned as a SHA rather than a branch name on purpose:
+// once these changes are merged, `main` *is* the patched tree, and defaulting to it would silently
+// build the baseline from the same source and compare a build against itself.
+const UPSTREAM_BASE = '2753847'
+
 const args = process.argv.slice(2)
 await getAssets()
 if (!args.includes('--assets')) {
-  const upstream = process.env.BASELINE_REF || 'main'
+  const upstream = process.env.BASELINE_REF || UPSTREAM_BASE
   buildRef('HEAD', 'patched')
   buildRef(upstream, 'baseline')
   console.log('\nready. start the server with:  npx vite --port 5199 --strictPort')

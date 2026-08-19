@@ -9,7 +9,7 @@ else. Every runner prints a machine fingerprint so it is obvious when two result
 ## Run it
 
 ```shell
-npm install
+npm install                             # if it reports blocked postinstalls: npm approve-scripts
 node bench/prepare.mjs                  # fetch assets, build branch + upstream baseline
 npx vite --port 5199 --strictPort &     # must be this server: it sets the COOP/COEP headers
 node bench/throughput.mjs               # or any runner below
@@ -18,7 +18,9 @@ node bench/throughput.mjs               # or any runner below
 `prepare.mjs` builds two trees into `bench/dist/`:
 
 - `patched` — your current `HEAD`
-- `baseline` — unmodified upstream (`main`, override with `BASELINE_REF=<ref>`)
+- `baseline` — unmodified upstream, pinned to the commit this work branched from (override with
+  `BASELINE_REF=<ref>`). It is a SHA and not `main` deliberately: after these changes merge, `main` is the
+  patched tree, and a branch-name default would quietly compare a build against itself.
 
 It only runs `tsc`; the wasm binaries are committed, so no emsdk or Docker is needed just to benchmark.
 Assets (~45 MB of the upstream demo's own video, subtitles and fonts) are fetched, not committed.
@@ -81,11 +83,22 @@ GPU. Every runner launches headed with `channel: 'chrome'` deliberately.
 without which `SharedArrayBuffer` is unavailable and libass silently drops to single-threaded — worth about
 1.6x on its own.
 
+**Benchmark on a quiet machine.** Timing tails are the first thing to go. A run taken at load average ~12 on
+a 12-core host produced upstream max-frame figures of 41.5 / 38.8 / 13.9 ms across three repetitions against
+a settled value near 17 ms, and a 156 ms outlier on a 1.4 ms workload. Counts (libass reconfigures, dropped
+frames) and the pixel checks are robust to this; averages mostly are; maxima and p99 are not. Close other
+browsers and editors first, and check `uptime` before trusting a tail.
+
 **Cases are run round-robin**, one repetition of each before the next, so thermal drift hits every case
 equally. Do not "optimise" this into all-reps-per-case.
 
-**Pin the render size when comparing builds** (`MRH=540`). Otherwise the two builds can legitimately choose
-different render resolutions and you are comparing pixel counts, not code.
+**Pin the render size when comparing *pixels*.** Unpinned, the two builds can legitimately choose different
+render resolutions, and `matrix.mjs` then reports every single frame as a mismatch — a red FAIL that looks
+like a rendering regression and is not one. `all.mjs` pins `MRH=540` for `matrix` automatically; running
+`matrix.mjs` directly warns if you forget. The numeric suites are deliberately *not* pinned: 540p drops the
+workload to ~1.4 ms/frame, well under the 8.3 ms budget at 120 fps, and the deadline-miss metric stops
+telling you anything. They print each case's backing size instead — if two cases report different `backing`,
+stop, they are not comparable.
 
 **Judge on deadline-miss rate, not averages.** Rendering happens once per presented video frame, so what
 matters is landing inside that frame's budget (41.7 / 33.3 / 16.7 / 8.3 ms at 24 / 30 / 60 / 120 fps). At 24

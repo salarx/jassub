@@ -213,7 +213,53 @@ Support for older browsers (without OffscreenCanvas, WebAssembly threads, etc) h
 
 Run git clone --recursive https://github.com/ThaUnknown/jassub.git
 
-### Docker
+### In a container
 
-1. Install Docker
-2. ./run-docker-build.sh or ./run-docker-build.ps1
+1. Install a container runtime (see below)
+2. `./run-docker-build.sh` or `./run-docker-build.ps1`
+
+The shell script honours `CONTAINER_ENGINE` (default `docker`) and `CONTAINER_RUN_ARGS`, so any runtime with a
+docker-compatible `build`/`run` CLI can drive the same image.
+
+**Linux** — Docker or Podman natively.
+
+**macOS 26+** — Apple's [`container`](https://github.com/apple/container) is a native alternative to Docker
+Desktop:
+
+```shell
+brew install container && container system start
+CONTAINER_ENGINE=container ./run-docker-build.sh
+```
+
+If DNS fails inside the container, your host resolver is probably on loopback (Cloudflare WARP sets
+`127.0.2.2`), which the guest cannot reach. Point it at a reachable resolver:
+
+```shell
+CONTAINER_ENGINE=container CONTAINER_RUN_ARGS="--dns 1.1.1.1" ./run-docker-build.sh
+```
+
+**Windows** — there is no native Linux-container runtime. Docker Desktop, Podman Desktop and Rancher Desktop
+all run the containers inside WSL2, and Windows containers can only run Windows images, so this Linux image
+cannot run on them. The genuinely container-free path is to skip the container and build directly in WSL2:
+
+```shell
+wsl --install -d Ubuntu          # once, from PowerShell
+```
+
+then build inside WSL2 without any container — see *Without a container* below. `./run-docker-build.ps1`
+still works if you would rather keep Docker Desktop.
+
+### Without a container
+
+The container exists only to pin the toolchain; the build itself is a plain `make`. On any Linux (including
+WSL2) you need [emsdk](https://emscripten.org/docs/getting_started/downloads.html) 6.0.4 on `PATH` plus the
+packages the [`Dockerfile`](Dockerfile) installs:
+
+```shell
+sudo apt-get install -y build-essential cmake dos2unix git ragel patch libtool itstool \
+    pkg-config python3 gettext autopoint automake autoconf m4 gperf licensecheck
+npm install
+make && MODERN=1 make
+```
+
+Both `make` invocations are needed: the first builds the baseline worker, the second the modern (SIMD) one.
