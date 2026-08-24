@@ -132,6 +132,21 @@ export class WebGPUBufferRenderer {
     this._init(canvas).catch(console.error)
   }
 
+  /**
+   * Set up and report whether it worked, instead of failing into a renderer that quietly draws nothing.
+   * Used when this is chosen automatically rather than asked for by name.
+   */
+  async trySetCanvas (canvas: OffscreenCanvas): Promise<boolean> {
+    this.canvas = canvas
+    try {
+      await this._init(canvas)
+      return true
+    } catch (e) {
+      console.warn('jassub: WebGPU setup failed, falling back', e)
+      return false
+    }
+  }
+
   async _init (canvas: OffscreenCanvas) {
     const adapter = await navigator.gpu.requestAdapter({ powerPreference: 'high-performance' })
     if (!adapter) throw new Error('No WebGPU adapter')

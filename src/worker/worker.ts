@@ -89,27 +89,45 @@ export class ASSRenderer {
         this._gpurender = cpu
       }
     } else {
-    try {
-      const testCanvas = new OffscreenCanvas(1, 1)
+      // Default to the storage-buffer WebGPU renderer: fastest of the three measured, and it holds a
+      // frame's bitmaps in about 16MB where the array-texture designs need 94.7MB for the same content.
+      //
+      // It is chosen here rather than asked for by name, so it has to prove it works. A WebGPU device that
+      // fails to come up would otherwise leave a renderer attached that draws nothing at all, which is a
+      // worse failure than being slower. On any failure this falls through to the WebGL2 path below - the
+      // previous default - and says so.
       const forced = data.renderer && data.renderer !== 'auto' ? data.renderer : null
-      if (forced === 'webgpu') {
-        this._gpurender = new WebGPUBatchedRenderer()
-      } else if (forced === 'webgpu-buffer') {
-        this._gpurender = new WebGPUBufferRenderer()
-      } else if (forced === 'canvas2d') {
-        this._gpurender = new Canvas2DRenderer()
-      } else if (forced === 'webgl1') {
-        this._gpurender = new WebGL1Renderer()
-      } else if (testCanvas.getContext('webgl2')) {
-        this._gpurender = forced === 'webgl2-atlas' ? new WebGL2AtlasRenderer() : new WebGL2Renderer()
-      } else {
-        this._gpurender = testCanvas.getContext('webgl')?.getExtension('ANGLE_instanced_arrays') ? new WebGL1Renderer() : new Canvas2DRenderer()
+      let chosen = false
+      if (!forced && await WebGPUBufferRenderer.isSupported()) {
+        const gpu = new WebGPUBufferRenderer()
+        if (await gpu.trySetCanvas(ctrl)) {
+          this._gpurender = gpu
+          chosen = true
+        }
       }
-    } catch {
-      this._gpurender = new Canvas2DRenderer()
-    }
 
-    this._gpurender.setCanvas(ctrl)
+      if (!chosen) {
+        try {
+          const testCanvas = new OffscreenCanvas(1, 1)
+          if (forced === 'webgpu') {
+            this._gpurender = new WebGPUBatchedRenderer()
+          } else if (forced === 'webgpu-buffer') {
+            this._gpurender = new WebGPUBufferRenderer()
+          } else if (forced === 'canvas2d') {
+            this._gpurender = new Canvas2DRenderer()
+          } else if (forced === 'webgl1') {
+            this._gpurender = new WebGL1Renderer()
+          } else if (testCanvas.getContext('webgl2')) {
+            this._gpurender = forced === 'webgl2-atlas' ? new WebGL2AtlasRenderer() : new WebGL2Renderer()
+          } else {
+            this._gpurender = testCanvas.getContext('webgl')?.getExtension('ANGLE_instanced_arrays') ? new WebGL1Renderer() : new Canvas2DRenderer()
+          }
+        } catch {
+          this._gpurender = new Canvas2DRenderer()
+        }
+
+        this._gpurender.setCanvas(ctrl)
+      }
     }
 
     // The track fetch, the WASM instantiation and the font downloads are all independent, but used to run
