@@ -34,11 +34,18 @@ export function installRuntimeShims () {
   // support, which does the handshake itself - see pickLoaderName and JASSUBNode's `threads` option.
 }
 
-/** True where emscripten's node pthread build is the right one: Node and Bun, but not Deno. */
-export function isNodeLike (): boolean {
+/**
+ * True where emscripten's node pthread build is the right one, which is every non-browser runtime here.
+ *
+ * Deno is included despite having real, spec-compliant web Workers. The browser build's pthread path does
+ * not work there: with a thread pool configured it spawns its workers and then traps with "memory access
+ * out of bounds" on the first render, at any thread count. The node build - worker_threads, workerData,
+ * emscripten running the handshake itself - works, and Deno supports node: specifiers, so it is used there
+ * too. It is worth 4.6x on libass in Deno as well.
+ */
+export function prefersNodeBuild (): boolean {
   const g = globalThis as { Deno?: unknown, process?: { versions?: { node?: string } } }
-  if (g.Deno) return false
-  return !!g.process?.versions?.node
+  return !!g.Deno || !!g.process?.versions?.node
 }
 
 // Teach fetch to serve file: URLs. Node, Bun and Deno all reject them, and the wasm binary, the default
@@ -98,7 +105,14 @@ export function pickWasmName (): string {
  * 4.6x on libass.
  */
 export function pickLoaderName (): string {
-  return isNodeLike() ? 'jassub-worker-node.mjs' : 'jassub-worker.js'
+  return prefersNodeBuild() ? 'jassub-worker-node.mjs' : 'jassub-worker.js'
+}
+
+/** Threads to ask libass for: leave a couple of cores, and do not run away on a big machine. */
+export function defaultThreads (): number {
+  if (!prefersNodeBuild()) return 1
+  const cores = globalThis.navigator?.hardwareConcurrency ?? 4
+  return Math.min(Math.max(1, cores - 2), 8)
 }
 
 const validates = (bytes: Uint8Array) => {

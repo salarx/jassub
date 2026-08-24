@@ -12,7 +12,7 @@
 //
 // The shims have to be installed before the worker module is imported, because the failures they prevent
 // happen at module-evaluation time. Hence the dynamic import below rather than a static one.
-import { installRuntimeShims, isNodeLike, pickLoaderName, pickWasmName, toFetchable } from './runtime.ts'
+import { defaultThreads, installRuntimeShims, pickLoaderName, pickWasmName, toFetchable } from './runtime.ts'
 
 import type { CPURenderer } from './worker/renderers/cpu-renderer.ts'
 import type { ASSRenderer } from './worker/worker.ts'
@@ -94,8 +94,7 @@ export default class JASSUBNode {
       ? undefined
       : (await import(new URL(`./wasm/${loader}`, import.meta.url).href)).default
 
-    const cores = globalThis.navigator?.hardwareConcurrency ?? 4
-    const threads = opts.threads ?? (isNodeLike() ? Math.min(Math.max(1, cores - 2), 8) : 1)
+    const threads = opts.threads ?? defaultThreads()
 
     // Preload the fonts rather than letting libass pull them on demand. On demand means the first render
     // happens before the default font exists: libass logs "failed to find any fallback", returns no images,

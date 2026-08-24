@@ -226,6 +226,11 @@ The renderer, libass bindings, font handling and colour conversion are the ones 
 only the render target differs. Rendering `box.ass` at 960x540 gives byte-for-byte the same lit-pixel count
 and mean alpha as Chrome does with the same options.
 
+libass runs multi-threaded here too - Deno loads the same `ENVIRONMENT=node` build Node and Bun use. Its own
+web Workers are real and spec-compliant, but the browser build's pthread path traps with "memory access out
+of bounds" on the first render under Deno, at any thread count. Threads default to `hardwareConcurrency - 2`
+capped at 8; pass `threads: 1` to disable.
+
 Two things to know:
 
 - **One instance per process.** A second `create()` in the same process fails inside emscripten's pthread

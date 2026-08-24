@@ -14,7 +14,7 @@
 // produced in Chrome, which is the point: it can be compared against one.
 import { finalizer } from 'abslink'
 
-import { pickWasmName, toFetchable } from './runtime.ts'
+import { defaultThreads, installRuntimeShims, pickLoaderName, pickWasmName, toFetchable } from './runtime.ts'
 import { ASSRenderer } from './worker/worker.ts'
 
 import type { WebGPUHeadlessRenderer } from './worker/renderers/webgpu-headless-renderer.ts'
@@ -40,6 +40,13 @@ export interface JASSUBDenoOptions {
   debug?: boolean
   /** 'auto' (default) uses Deno's WebGPU; 'cpu' pins CPU compositing, mainly useful for comparing them. */
   renderer?: 'auto' | 'cpu'
+  /**
+   * libass worker threads. Defaults to hardwareConcurrency - 2, capped at 8.
+   *
+   * Real threads, through emscripten's worker_threads support - which is why Deno loads the node build
+   * rather than the browser one. Worth 4.6x on libass. Pass 1 to disable.
+   */
+  threads?: number
 }
 
 export default class JASSUBDeno {
@@ -58,6 +65,8 @@ export default class JASSUBDeno {
     if (opts.subUrl == null && opts.subContent == null) throw new Error('one of subUrl or subContent is required')
     if (!navigator.gpu) throw new Error('WebGPU is unavailable. Deno needs --unstable-webgpu on older versions.')
 
+    installRuntimeShims()
+
     const availableFonts = opts.availableFonts ?? {}
     if (!availableFonts['liberation sans'] && !opts.defaultFont) {
       availableFonts['liberation sans'] = new URL('./default.woff2', import.meta.url).href
@@ -71,6 +80,14 @@ export default class JASSUBDeno {
       `./wasm/${pickWasmName()}`,
       import.meta.url
     ).href)
+
+    // The node build is what carries emscripten's worker_threads pthread support. Deno has real web
+    // Workers, but the browser build's pthread path traps on the first render there.
+    const loader = pickLoaderName()
+    const wasmFactory = loader === 'jassub-worker.js'
+      ? undefined
+      : (await import(new URL(`./wasm/${loader}`, import.meta.url).href)).default
+    const threads = opts.threads ?? defaultThreads()
 
     // Fonts travel the same path as the wasm and hit the same file: limitation.
     for (const [name, value] of Object.entries(availableFonts)) {
@@ -105,7 +122,9 @@ export default class JASSUBDeno {
       // there are no local fonts to query outside a browser
       queryFonts: false,
       renderer: opts.renderer === 'cpu' || !navigator.gpu ? 'cpu' : 'webgpu',
-      packed: true
+      packed: true,
+      wasmFactory,
+      threads
     } as never, async () => undefined) as unknown as Promise<ASSRenderer>)
 
     // ASSRenderer's constructor catches its own async failure and logs it, so a failed init arrives here as
