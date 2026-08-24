@@ -31,6 +31,8 @@ export type JASSUBOptions = {
   workerUrl?: string
   wasmUrl?: string
   modernWasmUrl?: string
+  /** Fixed-width SIMD build, used where relaxed SIMD is unavailable. */
+  simdWasmUrl?: string
   fonts?: Array<string | Uint8Array>
   availableFonts?: Record<string, Uint8Array | string>
   defaultFont?: string
@@ -157,6 +159,7 @@ export default class JASSUB {
     const Renderer = wrap<typeof ASSRenderer>(this._worker)
 
     const modern = opts.modernWasmUrl ?? new URL('./wasm/jassub-worker-modern.wasm', import.meta.url).href
+    const simd = opts.simdWasmUrl ?? new URL('./wasm/jassub-worker-simd.wasm', import.meta.url).href
     const normal = opts.wasmUrl ?? new URL('./wasm/jassub-worker.wasm', import.meta.url).href
 
     const availableFonts = opts.availableFonts ?? {}
@@ -166,7 +169,9 @@ export default class JASSUB {
 
     this.ready = new Renderer(
       {
-        wasmUrl: JASSUB._supportsSIMD ? modern : normal,
+        // three-way, because relaxed SIMD is not universal: the modern binary fails to compile outright
+        // where it is missing, and falling straight to scalar costs about 3x. simd128 itself is universal.
+        wasmUrl: JASSUB._supportsSIMD ? modern : (JASSUB._supportsSIMD128 ? simd : normal),
         width: ctrl.width,
         height: ctrl.height,
         subUrl: opts.subUrl,
@@ -207,6 +212,7 @@ export default class JASSUB {
   }
 
   static _supportsSIMD?: boolean
+  static _supportsSIMD128?: boolean
 
   static _test () {
     if (JASSUB._supportsSIMD != null) return
@@ -236,6 +242,19 @@ export default class JASSUB {
       ))
     } catch (e) {
       JASSUB._supportsSIMD = false
+    }
+
+    try {
+      JASSUB._supportsSIMD128 = WebAssembly.validate(Uint8Array.of(
+        0x00, 0x61, 0x73, 0x6d, 0x01, 0x00, 0x00, 0x00,
+        0x01, 0x04, 0x01, 0x60, 0x00, 0x00,
+        0x03, 0x02, 0x01, 0x00,
+        0x0a, 0x09, 0x01, 0x07, 0x00,
+        // i32.const 0; i8x16.splat; drop; end
+        0x41, 0x00, 0xfd, 0x0f, 0x1a, 0x0b
+      ))
+    } catch (e) {
+      JASSUB._supportsSIMD128 = false
     }
 
     const module = new WebAssembly.Module(Uint8Array.of(0x0, 0x61, 0x73, 0x6d, 0x01, 0x00, 0x00, 0x00))

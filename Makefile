@@ -7,6 +7,8 @@ BASE_DIR:=$(dir $(realpath $(firstword $(MAKEFILE_LIST))))
 # Keep caches separate so legacy and modern builds can coexist.
 ifeq (${MODERN},1)
 	BUILD_VARIANT := modern
+else ifeq (${SIMD},1)
+	BUILD_VARIANT := simd
 else
 	BUILD_VARIANT := legacy
 endif
@@ -34,6 +36,21 @@ SIMD_ARGS = \
 	-mfma \
 	-mrelaxed-simd
 
+# Fixed-width SIMD only. The modern build is unusable anywhere relaxed SIMD is missing - Bun's
+# JavaScriptCore rejects that binary outright ("relaxed simd instructions not supported"), so it falls all
+# the way back to the scalar build and pays about 3x for it. simd128 itself is universal. The AVX/FMA
+# lowerings are dropped along with -mrelaxed-simd because emscripten implements them with relaxed ops.
+SIMD_ARGS_PLAIN = \
+	-msimd128 \
+	-msse \
+	-msse2 \
+	-msse3 \
+	-mssse3 \
+	-msse4 \
+	-msse4.1 \
+	-msse4.2 \
+	-ftree-vectorize
+
 ifeq (${MODERN},1)
 	WORKER_NAME = jassub-worker-modern
 	WORKER_ARGS = \
@@ -43,6 +60,14 @@ ifeq (${MODERN},1)
 	override CFLAGS += $(SIMD_ARGS)
 	override CXXFLAGS += $(SIMD_ARGS)
 
+else ifeq (${SIMD},1)
+	WORKER_NAME = jassub-worker-simd
+	WORKER_ARGS = \
+		-s WASM=1 \
+		$(SIMD_ARGS_PLAIN)
+
+	override CFLAGS += $(SIMD_ARGS_PLAIN)
+	override CXXFLAGS += $(SIMD_ARGS_PLAIN)
 else
 	WORKER_NAME = jassub-worker
 	WORKER_ARGS = \

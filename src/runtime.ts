@@ -61,3 +61,39 @@ async function readLocalFile (url: string): Promise<Uint8Array> {
   const { readFile } = await import('node:fs/promises')
   return new Uint8Array(await readFile(new URL(url)))
 }
+
+/**
+ * Which wasm binary this runtime can actually run.
+ *
+ * Three-way rather than two, because relaxed SIMD is not universal. Bun's JavaScriptCore refuses the modern
+ * binary outright - "relaxed simd instructions not supported" - and dropping straight to the scalar build
+ * costs roughly 3x on libass. Fixed-width simd128 is supported everywhere current, so it is the middle rung.
+ */
+export function pickWasmName (): string {
+  if (validates(RELAXED_SIMD)) return 'jassub-worker-modern.wasm'
+  if (validates(SIMD128)) return 'jassub-worker-simd.wasm'
+  return 'jassub-worker.wasm'
+}
+
+const validates = (bytes: Uint8Array) => {
+  try { return WebAssembly.validate(bytes as unknown as BufferSource) } catch { return false }
+}
+
+// v128.const, v128.const, i8x16.relaxed_swizzle
+const RELAXED_SIMD = Uint8Array.of(
+  0x00, 0x61, 0x73, 0x6d, 0x01, 0x00, 0x00, 0x00,
+  0x01, 0x05, 0x01, 0x60, 0x00, 0x01, 0x7b,
+  0x03, 0x02, 0x01, 0x00,
+  0x0a, 0x2b, 0x01, 0x29, 0x00,
+  0xfd, 0x0c, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+  0xfd, 0x0c, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+  0xfd, 0x80, 0x02,
+  0x0b)
+
+// i32.const 0; i8x16.splat; drop
+const SIMD128 = Uint8Array.of(
+  0x00, 0x61, 0x73, 0x6d, 0x01, 0x00, 0x00, 0x00,
+  0x01, 0x04, 0x01, 0x60, 0x00, 0x00,
+  0x03, 0x02, 0x01, 0x00,
+  0x0a, 0x09, 0x01, 0x07, 0x00,
+  0x41, 0x00, 0xfd, 0x0f, 0x1a, 0x0b)

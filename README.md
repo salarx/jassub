@@ -259,6 +259,10 @@ compositing - but a native binding that installs a spec-shaped `navigator.gpu` i
 Both run single-threaded: libass' threads need a cross-origin-isolated page, and Node has no `Worker` global
 at all, which the pthread-enabled build needs to exist even when no thread is ever spawned.
 
+Bun gets its own wasm build. It has no relaxed SIMD, so it cannot load the modern binary at all, and before
+this it fell back to the scalar one and spent 60.9 ms per frame in libass against Node's 18.0 ms. On the
+fixed-width SIMD build it is 18.5 ms - the same work, at the same speed.
+
 # How to build?
 
 ## Get the Source
@@ -302,6 +306,23 @@ then build inside WSL2 without any container — see *Without a container* below
 still works if you would rather keep Docker Desktop.
 
 ### Without a container
+
+Clone with `--recursive`: freetype has a nested submodule of its own (`subprojects/dlg`), and without it the
+build stops at `check_out_submodule` trying to fetch it from inside the container, where the git metadata is
+not reachable. `git submodule update --init --recursive` fixes an existing clone.
+
+Three wasm variants are built, and the loader picks between them by feature test:
+
+| target | flags | used by |
+| --- | --- | --- |
+| `make` | none | anything without SIMD |
+| `SIMD=1 make` | `-msimd128` and the SSE lowerings | Bun, and any engine lacking relaxed SIMD |
+| `MODERN=1 make` | the above plus `-mrelaxed-simd`, AVX, FMA | Chrome, Node, Deno |
+
+The middle one exists because relaxed SIMD is not universal: JavaScriptCore rejects the modern binary
+outright, and dropping straight to the scalar build costs about 3.3x on libass. `-mavx/-mavx2/-mfma` are
+left out of it deliberately - emscripten implements those with relaxed instructions, which would put back
+the very opcodes the variant exists to avoid.
 
 The container exists only to pin the toolchain; the build itself is a plain `make`. On any Linux (including
 WSL2) you need [emsdk](https://emscripten.org/docs/getting_started/downloads.html) 6.0.4 on `PATH` plus the

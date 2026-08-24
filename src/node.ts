@@ -12,7 +12,7 @@
 //
 // The shims have to be installed before the worker module is imported, because the failures they prevent
 // happen at module-evaluation time. Hence the dynamic import below rather than a static one.
-import { installRuntimeShims, toFetchable } from './runtime.ts'
+import { installRuntimeShims, pickWasmName, toFetchable } from './runtime.ts'
 
 import type { CPURenderer } from './worker/renderers/cpu-renderer.ts'
 import type { ASSRenderer } from './worker/worker.ts'
@@ -75,7 +75,7 @@ export default class JASSUBNode {
     // These runtimes are single-threaded here, so the non-SIMD build is not automatically the safe choice -
     // pick the same way the browser does and let the probe decide.
     const wasmUrl = await toFetchable(opts.wasmUrl ?? new URL(
-      supportsSIMD() ? './wasm/jassub-worker-modern.wasm' : './wasm/jassub-worker.wasm',
+      `./wasm/${pickWasmName()}`,
       import.meta.url
     ).href)
 
@@ -143,22 +143,5 @@ export default class JASSUBNode {
   async destroy () {
     const { finalizer } = await import('abslink')
     await (this._renderer as unknown as Record<symbol, () => Promise<void>>)[finalizer]!()
-  }
-}
-
-// Same probe the browser build uses: a relaxed-SIMD module that only validates where the modern wasm runs.
-function supportsSIMD (): boolean {
-  try {
-    return WebAssembly.validate(Uint8Array.of(
-      0x00, 0x61, 0x73, 0x6d, 0x01, 0x00, 0x00, 0x00,
-      0x01, 0x05, 0x01, 0x60, 0x00, 0x01, 0x7b,
-      0x03, 0x02, 0x01, 0x00,
-      0x0a, 0x2b, 0x01, 0x29, 0x00,
-      0xfd, 0x0c, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
-      0xfd, 0x0c, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
-      0xfd, 0x80, 0x02,
-      0x0b))
-  } catch {
-    return false
   }
 }

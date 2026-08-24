@@ -14,7 +14,7 @@
 // produced in Chrome, which is the point: it can be compared against one.
 import { finalizer } from 'abslink'
 
-import { toFetchable } from './runtime.ts'
+import { pickWasmName, toFetchable } from './runtime.ts'
 import { ASSRenderer } from './worker/worker.ts'
 
 import type { WebGPUHeadlessRenderer } from './worker/renderers/webgpu-headless-renderer.ts'
@@ -68,7 +68,7 @@ export default class JASSUBDeno {
 
     // SIMD is selected the same way the browser build selects it, so the wasm under test is the same one.
     const wasmUrl = await toFetchable(opts.wasmUrl ?? new URL(
-      supportsSIMD() ? './wasm/jassub-worker-modern.wasm' : './wasm/jassub-worker.wasm',
+      `./wasm/${pickWasmName()}`,
       import.meta.url
     ).href)
 
@@ -138,22 +138,5 @@ export default class JASSUBDeno {
 
   async destroy () {
     await this._renderer[finalizer]()
-  }
-}
-
-// Same probe the browser build uses: a relaxed-SIMD module that only validates where the modern wasm runs.
-function supportsSIMD (): boolean {
-  try {
-    return WebAssembly.validate(Uint8Array.of(
-      0x00, 0x61, 0x73, 0x6d, 0x01, 0x00, 0x00, 0x00,
-      0x01, 0x05, 0x01, 0x60, 0x00, 0x01, 0x7b,
-      0x03, 0x02, 0x01, 0x00,
-      0x0a, 0x2b, 0x01, 0x29, 0x00,
-      0xfd, 0x0c, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
-      0xfd, 0x0c, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
-      0xfd, 0x80, 0x02,
-      0x0b))
-  } catch {
-    return false
   }
 }
