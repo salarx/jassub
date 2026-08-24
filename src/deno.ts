@@ -17,7 +17,7 @@ import { finalizer } from 'abslink'
 import { defaultThreads, installRuntimeShims, pickLoaderName, pickWasmName, toFetchable } from './runtime.ts'
 import { ASSRenderer } from './worker/worker.ts'
 
-import type { WebGPUHeadlessRenderer } from './worker/renderers/webgpu-headless-renderer.ts'
+import type { WebGPUBufferHeadlessRenderer } from './worker/renderers/webgpu-buffer-headless-renderer.ts'
 
 export interface JASSUBDenoOptions {
   /** Render width in pixels. */
@@ -38,8 +38,12 @@ export interface JASSUBDenoOptions {
   libassMemoryLimit?: number
   libassGlyphLimit?: number
   debug?: boolean
-  /** 'auto' (default) uses Deno's WebGPU; 'cpu' pins CPU compositing, mainly useful for comparing them. */
-  renderer?: 'auto' | 'cpu'
+  /**
+   * 'auto' (default) renders on the GPU through a storage buffer, which holds a dense frame's bitmaps in
+   * ~16MB. 'webgpu' uses the array-texture renderer instead: about 8% faster here and ~90.5MB, worth it
+   * for a single process and not for eight. 'cpu' pins CPU compositing.
+   */
+  renderer?: 'auto' | 'webgpu' | 'cpu'
   /**
    * libass worker threads. Defaults to hardwareConcurrency - 2, capped at 8.
    *
@@ -121,7 +125,7 @@ export default class JASSUBDeno {
       libassGlyphLimit: opts.libassGlyphLimit ?? 0,
       // there are no local fonts to query outside a browser
       queryFonts: false,
-      renderer: opts.renderer === 'cpu' || !navigator.gpu ? 'cpu' : 'webgpu',
+      renderer: opts.renderer === 'cpu' || !navigator.gpu ? 'cpu' : (opts.renderer ?? 'auto'),
       packed: true,
       wasmFactory,
       threads
@@ -141,7 +145,7 @@ export default class JASSUBDeno {
    */
   async renderFrame (time: number): Promise<Uint8Array> {
     this._renderer._draw(time, true)
-    return await (this._renderer._gpurender as WebGPUHeadlessRenderer).read()
+    return await (this._renderer._gpurender as WebGPUBufferHeadlessRenderer).read()
   }
 
   /**
@@ -156,7 +160,7 @@ export default class JASSUBDeno {
    * Each buffer is only valid until the next iteration - copy it if you need to keep it.
    */
   async * renderFrames (times: Iterable<number>): AsyncGenerator<Uint8Array> {
-    const gpu = this._renderer._gpurender as WebGPUHeadlessRenderer
+    const gpu = this._renderer._gpurender as WebGPUBufferHeadlessRenderer
     if (typeof gpu.beginRead !== 'function') {
       // CPU compositing has the pixels already; there is nothing to overlap
       for (const t of times) yield await this.renderFrame(t)

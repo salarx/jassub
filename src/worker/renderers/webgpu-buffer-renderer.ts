@@ -161,6 +161,10 @@ export class WebGPUBufferRenderer {
     this.targetWidth = canvas.width
     this.targetHeight = canvas.height
 
+    this._initPipeline(device)
+  }
+
+  _initPipeline (device: GPUDevice) {
     const module = device.createShaderModule({ code: SHADER })
     this.pipeline = device.createRenderPipeline({
       layout: 'auto',
@@ -251,13 +255,25 @@ export class WebGPUBufferRenderer {
     this._scheduledResize = { width, height }
   }
 
+  // Overridden by the headless target, which resizes textures instead of a canvas.
+  _applyResize (width: number, height: number) {
+    this.canvas!.width = width
+    this.canvas!.height = height
+  }
+
+  // Where this frame is drawn. The canvas path hands back the swapchain texture; a headless target hands
+  // back its own. Returning null skips the frame rather than throwing.
+  _acquireView (): GPUTextureView | null {
+    return this.context ? this.context.getCurrentTexture().createView() : null
+  }
+
   setColorMatrix (subtitleColorSpace?: 'BT601' | 'BT709' | 'SMPTE240M' | 'FCC', videoColorSpace?: 'BT601' | 'BT709') {
     this.colorMatrix = (subtitleColorSpace && videoColorSpace && colorMatrixConversionMap[subtitleColorSpace]?.[videoColorSpace]) ?? IDENTITY_MATRIX
     if (this._ready) this._writeUniforms()
   }
 
   render (images: ASSImage[], heap: Uint8Array): void {
-    if (!this._ready || !this.device || !this.context || !this.pipeline) return
+    if (!this._ready || !this.device || !this.pipeline) return
     const device = this.device
 
     if ((self.HEAPU8RAW.buffer !== self.WASMMEMORY.buffer) || SHOULD_REFERENCE_MEMORY) {
@@ -267,15 +283,15 @@ export class WebGPUBufferRenderer {
     if (this._scheduledResize) {
       const { width, height } = this._scheduledResize
       this._scheduledResize = undefined
-      this.canvas!.width = width
-      this.canvas!.height = height
+      this._applyResize(width, height)
       this.targetWidth = width
       this.targetHeight = height
       this._writeUniforms()
     }
 
     const valid = images.filter(img => img.w > 0 && img.h > 0)
-    const view = this.context.getCurrentTexture().createView()
+    const view = this._acquireView()
+    if (!view) return
 
     if (!valid.length) {
       const encoder = device.createCommandEncoder()
@@ -320,7 +336,9 @@ export class WebGPUBufferRenderer {
 
       offset += (bytes + 3) & ~3
     }
-    device.queue.writeBuffer(this.instanceBuffer!, 0, this.instanceData, 0, valid.length * INSTANCE_BYTES)
+    // A view, not the raw ArrayBuffer: Deno's WebGPU rejects the latter where Chrome accepts it. Offsets
+    // and sizes are in elements for a typed array, which is why this counts floats rather than bytes.
+    device.queue.writeBuffer(this.instanceBuffer!, 0, this.instanceU32 as unknown as GPUAllowSharedBufferSource, 0, valid.length * INSTANCE_FLOATS)
 
     // One pass, one draw, one submit - every write above is already ordered ahead of it on the queue.
     // JASSUB_GPUBUF_BATCH splits it into several, to test whether draw size is what makes a heavily

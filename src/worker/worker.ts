@@ -10,6 +10,7 @@ import { WebGL1Renderer } from './renderers/webgl1-renderer.ts'
 import { WebGL2AtlasRenderer } from './renderers/webgl2-atlas-renderer.ts'
 import { WebGL2Renderer } from './renderers/webgl2-renderer.ts'
 import { WebGPUBatchedRenderer } from './renderers/webgpu-batched-renderer.ts'
+import { WebGPUBufferHeadlessRenderer } from './renderers/webgpu-buffer-headless-renderer.ts'
 import { WebGPUBufferRenderer } from './renderers/webgpu-buffer-renderer.ts'
 import { WebGPUHeadlessRenderer } from './renderers/webgpu-headless-renderer.ts'
 import { _fetch, fetchtext, LIBASS_YCBCR_MAP, THREAD_COUNT, WEIGHT_MAP, type ASSEvent, type ASSImage, type ASSStyle, type WeightValue } from './util.ts'
@@ -55,7 +56,7 @@ export class ASSRenderer {
   _subtitleColorSpace?: 'BT601' | 'BT709' | 'SMPTE240M' | 'FCC' | null
   _videoColorSpace?: 'BT709' | 'BT601'
   _malloc!: (size: number) => number
-  _gpurender!: WebGL2Renderer | WebGL2AtlasRenderer | WebGPUBatchedRenderer | WebGPUBufferRenderer | WebGPUHeadlessRenderer | CPURenderer | WebGL1Renderer | Canvas2DRenderer
+  _gpurender!: WebGL2Renderer | WebGL2AtlasRenderer | WebGPUBatchedRenderer | WebGPUBufferRenderer | WebGPUBufferHeadlessRenderer | WebGPUHeadlessRenderer | CPURenderer | WebGL1Renderer | Canvas2DRenderer
 
   debug = false
   _packed = true
@@ -87,7 +88,14 @@ export class ASSRenderer {
       // WebGPU where it exists (Deno), CPU compositing where it does not (Node, Bun). Both produce the
       // same premultiplied RGBA for the same frame; only where the blending happens differs.
       if (navigator.gpu && data.renderer !== 'cpu') {
-        const headless = new WebGPUHeadlessRenderer()
+        // Storage buffer by default: ~16MB against ~90.5MB for the array texture on a dense frame. It is
+        // about 8% slower here, which is the opposite of the browser, where it was equal or faster - Deno
+        // runs wgpu and Chrome runs Dawn, and storage-buffer reads in a fragment shader are not equally
+        // fast on both. Memory wins the default because headless work runs many processes at once, and
+        // eight of them at 90.5MB is most of a GPU. renderer: 'webgpu' picks the faster, larger one.
+        const headless = data.renderer === 'webgpu'
+          ? new WebGPUHeadlessRenderer()
+          : new WebGPUBufferHeadlessRenderer()
         await headless.init(data.width, data.height)
         this._gpurender = headless
       } else {
