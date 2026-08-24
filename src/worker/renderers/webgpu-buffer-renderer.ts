@@ -296,7 +296,12 @@ export class WebGPUBufferRenderer {
     for (let i = 0; i < valid.length; i++) {
       const img = valid[i]!
       const bytes = img.stride * img.h
-      device.queue.writeBuffer(this.dataBuffer!, offset, heap as unknown as GPUAllowSharedBufferSource, img.bitmap, bytes)
+      // writeBuffer copies must be a multiple of 4. stride * h very often is not, and a rejected write
+      // leaves that bitmap as whatever the buffer held before - which showed up as a single wrong frame on
+      // one track while every other frame matched. Round up, clamping so the read stays inside the heap.
+      const padded = (bytes + 3) & ~3
+      const room = (heap.length - img.bitmap) & ~3
+      device.queue.writeBuffer(this.dataBuffer!, offset, heap as unknown as GPUAllowSharedBufferSource, img.bitmap, Math.min(padded, room))
 
       const o = i * INSTANCE_FLOATS
       f32[o] = img.dst_x
