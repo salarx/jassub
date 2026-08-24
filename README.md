@@ -262,7 +262,11 @@ const rgba = await subs.renderFrame(12.5)   // premultiplied RGBA, width * heigh
 await subs.destroy()
 ```
 
-Run it with `deno run --allow-read --allow-net`, using the `deno.json` in this repo for the npm imports.
+Run it with `deno run --allow-read --allow-sys`, using the `deno.json` in this repo for the npm imports.
+`--allow-sys` is not optional: emscripten asks the OS for the core count while the module is still
+instantiating, so without it startup fails with `Requires sys access to "cpus"` before any of your code
+runs. Add `--allow-net` only if the track or fonts are remote, and `--allow-ffi --unstable-webgpu` to let
+a native WebGPU binding load.
 
 The renderer, libass bindings, font handling and colour conversion are the ones the browser build uses -
 only the render target differs. Rendering `box.ass` at 960x540 gives byte-for-byte the same lit-pixel count
