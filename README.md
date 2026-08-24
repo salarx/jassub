@@ -40,9 +40,45 @@ headers are recommended to use this library, as it uses SharedArrayBuffer for mu
 
 They are worth more than "recommended" suggests. Serving the same page without them, on the same machine
 and content, costs **3.3x**: a dense 1080p frame goes from 4.7ms to 15.5ms, because libass drops from eight
-threads to one. Nothing else in this library comes close to that for the effort - it is two response
-headers, and it needs no code change at all. If subtitle rendering feels heavy in a browser, check
-`crossOriginIsolated` in the console before looking anywhere else.
+threads to one. Nothing else in this library comes close for the effort - two response headers, no code
+change. If subtitle rendering feels heavy in a browser, check `crossOriginIsolated` in the console before
+looking anywhere else; `false` means you are on one thread.
+
+Setting them, for a few common hosts:
+
+```
+# Netlify, Cloudflare Pages - _headers
+/*
+  Cross-Origin-Opener-Policy: same-origin
+  Cross-Origin-Embedder-Policy: require-corp
+```
+
+```js
+// Express
+app.use((req, res, next) => {
+  res.set('Cross-Origin-Opener-Policy', 'same-origin')
+  res.set('Cross-Origin-Embedder-Policy', 'require-corp')
+  next()
+})
+```
+
+```nginx
+add_header Cross-Origin-Opener-Policy same-origin;
+add_header Cross-Origin-Embedder-Policy require-corp;
+```
+
+**`require-corp` will break cross-origin subresources that have not opted in**, and for a video player that
+usually means the video itself. Every cross-origin image, font, subtitle and media file then needs either
+`Cross-Origin-Resource-Policy: cross-origin` from the origin serving it, or CORS plus a `crossorigin`
+attribute on the element. If the media is on a CDN you do not control, check this before shipping the
+headers - the failure is the asset not loading at all, not subtitles being slow.
+
+`Cross-Origin-Embedder-Policy: credentialless` is the softer option: it drops the CORP requirement by
+sending cross-origin requests without credentials. Support is narrower, and anything that needs cookies to
+fetch - signed URLs are usually fine, cookie-authenticated media is not - will fail instead.
+
+`Cross-Origin-Opener-Policy: same-origin` also severs `window.opener`, so OAuth popups and similar flows
+are worth testing once the headers are on.
 
 At minimum WASM + TextDecoder + OffscreenCanvas + Web Workers + Proxy + Fetch + Promise + getVideoPlaybackQuality/requestVideoFrameCallback are required for JASSUB to work.
 
