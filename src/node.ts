@@ -12,7 +12,7 @@
 //
 // The shims have to be installed before the worker module is imported, because the failures they prevent
 // happen at module-evaluation time. Hence the dynamic import below rather than a static one.
-import { defaultThreads, installRuntimeShims, pickLoaderName, pickWasmName, toFetchable } from './runtime.ts'
+import { defaultThreads, installOptionalWebGPU, installRuntimeShims, pickLoaderName, pickWasmName, toFetchable } from './runtime.ts'
 
 import type { CPURenderer } from './worker/renderers/cpu-renderer.ts'
 import type { ASSRenderer } from './worker/worker.ts'
@@ -68,6 +68,8 @@ export default class JASSUBNode {
     if (opts.subUrl == null && opts.subContent == null) throw new Error('one of subUrl or subContent is required')
 
     installRuntimeShims()
+    // picks up a native WebGPU binding if one is installed; no-op otherwise
+    if (opts.renderer !== 'cpu') await installOptionalWebGPU()
     const { ASSRenderer } = await import('./worker/worker.ts')
 
     const availableFonts = opts.availableFonts ?? {}
@@ -149,14 +151,29 @@ export default class JASSUBNode {
   }
 
   /**
-   * Render many timestamps. Present for API parity with the Deno entry, where it overlaps each frame's GPU
-   * readback with the next frame's work. CPU compositing has the pixels already, so there is nothing to
-   * overlap here and this is simply a loop.
+   * Render many timestamps, overlapping each frame's readback with the next frame's work where there is a
+   * readback to overlap.
+   *
+   * CPU compositing has the pixels already and this is simply a loop. With a GPU binding installed it is
+   * not: the renderer alternates between two target textures so the GPU can copy one frame while libass
+   * rasterises the next.
    *
    * Each buffer is only valid until the next iteration - copy it if you need to keep it.
    */
   async * renderFrames (times: Iterable<number>): AsyncGenerator<Uint8Array> {
-    for (const t of times) yield await this.renderFrame(t)
+    const gpu = this._renderer._gpurender as { beginRead?: () => Promise<Uint8Array> }
+    if (typeof gpu.beginRead !== 'function') {
+      for (const t of times) yield await this.renderFrame(t)
+      return
+    }
+    let pending: Promise<Uint8Array> | null = null
+    for (const t of times) {
+      this._renderer._draw(t, true)
+      const next = gpu.beginRead()
+      if (pending) yield await pending
+      pending = next
+    }
+    if (pending) yield await pending
   }
 
   /** Change the render resolution. */

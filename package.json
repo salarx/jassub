@@ -3,6 +3,22 @@
   "version": "2.6.0",
   "description": "The Fastest JavaScript SSA/ASS Subtitle Renderer For Browsers",
   "main": "dist/jassub.js",
+  "exports": {
+    ".": {
+      "types": "./dist/jassub.d.ts",
+      "default": "./dist/jassub.js"
+    },
+    "./node": {
+      "types": "./dist/node.d.ts",
+      "default": "./dist/node.js"
+    },
+    "./deno": {
+      "types": "./dist/deno.d.ts",
+      "default": "./dist/deno.js"
+    },
+    "./dist/*": "./dist/*",
+    "./package.json": "./package.json"
+  },
   "type": "module",
   "files": [
     "dist/wasm/*",

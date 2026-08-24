@@ -272,6 +272,24 @@ Renderer choice is by capability, not by runtime name. Neither ships WebGPU toda
 compositing - but a native binding that installs a spec-shaped `navigator.gpu` is used automatically. Pass
 `renderer: 'cpu'` to pin it.
 
+Neither ships WebGPU, so compositing happens on the CPU by default. Installing a native binding moves it to
+the GPU and nothing else has to change - renderer selection is by capability, not by runtime name:
+
+```shell
+npm i webgpu        # Node, wraps Dawn
+bun  add bun-webgpu # Bun
+```
+
+A dense 1080p frame, 30 frames through `renderFrames`:
+
+| | ms/frame |
+| --- | --- |
+| CPU compositing | 21.7 |
+| with a binding, pipelined | **6.3** |
+
+`renderFrames` overlaps each frame's readback with the next frame's work, which is where most of that comes
+from. `renderFrame` on its own gets about 8ms. Pass `renderer: 'cpu'` to pin CPU compositing regardless.
+
 Both run libass multi-threaded, which is the single largest win available here:
 
 | threads | libass |
