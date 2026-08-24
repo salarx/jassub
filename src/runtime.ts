@@ -57,12 +57,21 @@ export function installRuntimeShims () {
  * The values are baked into a blob module rather than passed as query parameters: a Bun worker has no
  * `location`, so there would be nothing to read them back from.
  *
- * This is not finished. With it in place Bun spawns all eight pthread workers, each one loads the
- * emscripten module without error, and `extern-pre-worker.js` normalises the name as it should - verified
- * in isolation and by instrumenting the real run. The main thread then fails posting the compiled module
- * to them with "Worker has been terminated", and a keepalive timer in the worker does not prevent it, so
- * something about Bun's worker lifetime ends them before the handshake completes. Left here, behind
- * JASSUB_THREADS=1, because the remaining problem is that last step rather than any of the plumbing.
+ * This is not finished, and JASSUB_THREADS=1 currently hangs. What it took to get this far, since none of
+ * it is guessable and all of it fails at module-evaluation time:
+ *
+ *   - `WorkerGlobalScope` must exist, or emscripten decides the worker is the main thread.
+ *   - `name` must be set, and Bun does not propagate the constructor's name option to the worker.
+ *   - `location.href` must be readable. Bun's workers have none, and emscripten reads it unconditionally
+ *     when it believes it is in a worker, so the read throws and takes the module factory down with it.
+ *   - the module factory must be *called*. Importing an ES6 emscripten build does not run it, and the
+ *     branch that installs the pthread onmessage handler lives inside it. Without that the worker
+ *     registers no handler, has nothing pending, and exits - which the main thread reports as "Worker has
+ *     been terminated" while posting the compiled module, pointing at entirely the wrong place. A plain
+ *     Bun worker with an onmessage handler stays alive indefinitely, so it was never an idle-teardown.
+ *
+ * With all four in place the workers survive and the handshake then stalls instead. That is where it
+ * stands: the plumbing is right and the pthread bring-up itself is not completing.
  */
 function installPthreadBootstrap (g: Record<string, unknown>) {
   const Native = g.Worker as new (url: string | URL, options?: object) => unknown
@@ -80,13 +89,21 @@ function installPthreadBootstrap (g: Record<string, unknown>) {
         "Object.defineProperty(globalThis, 'WorkerGlobalScope', { value: function WorkerGlobalScope () {}, configurable: true })",
         `globalThis.name = ${JSON.stringify(name)}`,
         'globalThis.self = globalThis',
+        // emscripten reads self.location.href when it decides it is in a worker. Bun's workers have no
+        // location at all, so that read throws and takes the whole module factory down with it.
+        `if (typeof globalThis.location === 'undefined') Object.defineProperty(globalThis, 'location', { value: { href: ${JSON.stringify(String(scriptURL))} }, configurable: true })`,
         // each worker is its own realm, so the file: support has to be installed again in here
         FETCH_FILE_SHIM,
         // Hold the event loop open. Bun tears down a worker once its module finishes and nothing is
         // pending; an onmessage handler alone does not count, so the pthread would be terminated before
         // the main thread ever posts it the compiled module.
         'globalThis.__jassubKeepAlive = setInterval(() => {}, 2147483647)',
-        `await import(${JSON.stringify(String(scriptURL))})`
+        // Importing an ES6 emscripten build does not run it. In a pthread worker the branch that installs
+        // onmessage lives inside the module factory, so without calling it the worker registers no handler,
+        // has nothing pending, and exits - which the main thread then reports as "Worker has been
+        // terminated" when it posts the compiled module, pointing at entirely the wrong place.
+        `const m = await import(${JSON.stringify(String(scriptURL))})`,
+        'if (m && typeof m.default === "function") { try { await m.default({}) } catch (e) { console.error("[jassub pthread]", e) } }'
       ].join('\n')
       const url = URL.createObjectURL(new Blob([src], { type: 'text/javascript' }))
       super(url, { ...options, type: 'module' })
