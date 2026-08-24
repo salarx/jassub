@@ -256,11 +256,21 @@ Renderer choice is by capability, not by runtime name. Neither ships WebGPU toda
 compositing - but a native binding that installs a spec-shaped `navigator.gpu` is used automatically. Pass
 `renderer: 'cpu'` to pin it.
 
-Both run single-threaded. Not for want of threading - both runtimes have it, and both have
-`SharedArrayBuffer` unconditionally - but emscripten recognises a pthread worker by globals that neither
-supplies, and Node has no web `Worker` at all. There is an unfinished bootstrap behind `JASSUB_THREADS=1`
-that gets Bun as far as loading the module in all eight workers before the handshake fails; it is off by
-default because it does not work.
+Both run libass multi-threaded, which is the single largest win available here:
+
+| threads | libass |
+| --- | --- |
+| 1 | 15.1 ms |
+| 2 | 8.2 ms |
+| 4 | 4.3 ms |
+| 8 | 3.3 ms |
+
+That needs a build linked with `ENVIRONMENT=node`, because that is the one where emscripten emits its
+`worker_threads` pthread support and runs the thread handshake itself. `jassub/node` loads that build
+automatically. The browser build only knows how to spawn web Workers, and neither runtime provides one an
+emscripten pthread can start in - shimming it from the outside was tried at length and never worked.
+
+Thread count defaults to `hardwareConcurrency - 2`, capped at 8. Pass `threads: 1` to turn it off.
 
 Bun gets its own wasm build. It has no relaxed SIMD, so it cannot load the modern binary at all, and before
 this it fell back to the scalar one and spent 60.9 ms per frame in libass against Node's 18.0 ms. On the

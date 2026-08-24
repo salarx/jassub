@@ -12,7 +12,7 @@
 //
 // The shims have to be installed before the worker module is imported, because the failures they prevent
 // happen at module-evaluation time. Hence the dynamic import below rather than a static one.
-import { installRuntimeShims, pickWasmName, toFetchable } from './runtime.ts'
+import { installRuntimeShims, isNodeLike, pickLoaderName, pickWasmName, toFetchable } from './runtime.ts'
 
 import type { CPURenderer } from './worker/renderers/cpu-renderer.ts'
 import type { ASSRenderer } from './worker/worker.ts'
@@ -42,6 +42,14 @@ export interface JASSUBNodeOptions {
    * `navigator.gpu` will be picked up without changing anything here. 'cpu' pins CPU compositing.
    */
   renderer?: 'auto' | 'cpu'
+  /**
+   * libass worker threads. Defaults to hardwareConcurrency - 2, capped at 8.
+   *
+   * These are real threads, through emscripten's worker_threads support, and they are the single largest
+   * win available here: libass goes from 15.1ms to 3.3ms a frame at 8 on a 12-core machine. Set 1 to
+   * disable.
+   */
+  threads?: number
 }
 
 export default class JASSUBNode {
@@ -79,6 +87,16 @@ export default class JASSUBNode {
       import.meta.url
     ).href)
 
+    // The Node build is a separate loader, not just a different wasm: it is linked with ENVIRONMENT=node,
+    // which is where emscripten emits its worker_threads pthread support.
+    const loader = pickLoaderName()
+    const wasmFactory = loader === 'jassub-worker.js'
+      ? undefined
+      : (await import(new URL(`./wasm/${loader}`, import.meta.url).href)).default
+
+    const cores = globalThis.navigator?.hardwareConcurrency ?? 4
+    const threads = opts.threads ?? (isNodeLike() ? Math.min(Math.max(1, cores - 2), 8) : 1)
+
     // Preload the fonts rather than letting libass pull them on demand. On demand means the first render
     // happens before the default font exists: libass logs "failed to find any fallback", returns no images,
     // loads the font, and only the *next* render draws anything. A browser hides this because a video keeps
@@ -107,7 +125,9 @@ export default class JASSUBNode {
       queryFonts: false,
       // capability-based rather than runtime-based: ask for CPU only when there is no GPU to ask for
       renderer: opts.renderer === 'cpu' || !navigator.gpu ? 'cpu' : 'auto',
-      packed: true
+      packed: true,
+      wasmFactory,
+      threads
     } as never, async () => undefined) as unknown as Promise<ASSRenderer>)
 
     // ASSRenderer's constructor catches its own async failure and logs it, so a failed init arrives here as

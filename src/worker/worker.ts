@@ -37,6 +37,13 @@ interface opts {
   libassGlyphLimit: number
   queryFonts: 'local' | 'localandremote' | false
   renderer?: 'auto' | 'webgl2' | 'webgl2-atlas' | 'webgpu' | 'webgl1' | 'canvas2d' | 'webgpu-buffer' | 'cpu'
+  /**
+   * Loader to use instead of the bundled one. The browser import stays static so bundlers can see it; Node
+   * passes the ENVIRONMENT=node build here, which is the one with worker_threads pthread support.
+   */
+  wasmFactory?: (arg: Record<string, unknown>) => Promise<MainModule>
+  /** libass worker threads. Defaults to THREAD_COUNT, which is 1 outside a cross-origin-isolated page. */
+  threads?: number
   packed?: boolean
 }
 
@@ -144,13 +151,14 @@ export class ASSRenderer {
 
     this._loadedInitialFonts = !data.fonts.length
     // eslint-disable-next-line @typescript-eslint/unbound-method
-    const { _malloc, JASSUB } = await (WASM({ __url: data.wasmUrl, __out: (log: string) => this._log(log) }) as Promise<MainModule>)
+    const factory = data.wasmFactory ?? WASM
+    const { _malloc, JASSUB } = await (factory({ __url: data.wasmUrl, __out: (log: string) => this._log(log) }) as Promise<MainModule>)
     this._malloc = _malloc
 
     this._wasm = new JASSUB(data.width, data.height, this._defaultFont)
     // Firefox seems to have issues with multithreading in workers
     // a worker inside a worker does not recieve messages properly
-    this._wasm.setThreads(THREAD_COUNT)
+    this._wasm.setThreads(data.threads ?? THREAD_COUNT)
 
     if (!this._loadedInitialFonts) await this._loadInitialFonts(data.fonts)
 
