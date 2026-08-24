@@ -55,7 +55,7 @@ export type JASSUBOptions = {
    */
   resizeJumpRatio?: number
   /** force a specific renderer backend instead of auto-detecting. default 'auto' */
-  renderer?: 'auto' | 'webgl2' | 'webgl2-atlas' | 'webgpu' | 'webgl1' | 'canvas2d' | 'cpu'
+  renderer?: 'auto' | 'webgl2' | 'webgl2-atlas' | 'webgpu' | 'webgl1' | 'canvas2d' | 'webgpu-buffer' | 'cpu'
   /** use the packed int32 frame-metadata path instead of per-image embind objects. default true */
   packed?: boolean
   /** benchmark-only ablation switches, not public API */

@@ -301,7 +301,7 @@ export class WebGPUBatchedRenderer {
         // whole heap at byteOffset 0, so this is the same bytes and the same offset, and allocates nothing.
         device.queue.writeTexture(
           { texture: this.texArray, origin: { x: 0, y: 0, z: n } },
-          heap,
+          heap as unknown as GPUAllowSharedBufferSource,
           { offset: img.bitmap, bytesPerRow: img.stride, rowsPerImage: img.h },
           { width: img.w, height: img.h, depthOrArrayLayers: 1 }
         )

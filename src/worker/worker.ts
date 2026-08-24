@@ -10,6 +10,7 @@ import { WebGL1Renderer } from './renderers/webgl1-renderer.ts'
 import { WebGL2AtlasRenderer } from './renderers/webgl2-atlas-renderer.ts'
 import { WebGL2Renderer } from './renderers/webgl2-renderer.ts'
 import { WebGPUBatchedRenderer } from './renderers/webgpu-batched-renderer.ts'
+import { WebGPUBufferRenderer } from './renderers/webgpu-buffer-renderer.ts'
 import { WebGPUHeadlessRenderer } from './renderers/webgpu-headless-renderer.ts'
 import { _fetch, fetchtext, LIBASS_YCBCR_MAP, THREAD_COUNT, WEIGHT_MAP, type ASSEvent, type ASSImage, type ASSStyle, type WeightValue } from './util.ts'
 
@@ -35,7 +36,7 @@ interface opts {
   libassMemoryLimit: number
   libassGlyphLimit: number
   queryFonts: 'local' | 'localandremote' | false
-  renderer?: 'auto' | 'webgl2' | 'webgl2-atlas' | 'webgpu' | 'webgl1' | 'canvas2d' | 'cpu'
+  renderer?: 'auto' | 'webgl2' | 'webgl2-atlas' | 'webgpu' | 'webgl1' | 'canvas2d' | 'webgpu-buffer' | 'cpu'
   packed?: boolean
 }
 
@@ -47,7 +48,7 @@ export class ASSRenderer {
   _subtitleColorSpace?: 'BT601' | 'BT709' | 'SMPTE240M' | 'FCC' | null
   _videoColorSpace?: 'BT709' | 'BT601'
   _malloc!: (size: number) => number
-  _gpurender!: WebGL2Renderer | WebGL2AtlasRenderer | WebGPUBatchedRenderer | WebGPUHeadlessRenderer | CPURenderer | WebGL1Renderer | Canvas2DRenderer
+  _gpurender!: WebGL2Renderer | WebGL2AtlasRenderer | WebGPUBatchedRenderer | WebGPUBufferRenderer | WebGPUHeadlessRenderer | CPURenderer | WebGL1Renderer | Canvas2DRenderer
 
   debug = false
   _packed = true
@@ -93,6 +94,8 @@ export class ASSRenderer {
       const forced = data.renderer && data.renderer !== 'auto' ? data.renderer : null
       if (forced === 'webgpu') {
         this._gpurender = new WebGPUBatchedRenderer()
+      } else if (forced === 'webgpu-buffer') {
+        this._gpurender = new WebGPUBufferRenderer()
       } else if (forced === 'canvas2d') {
         this._gpurender = new Canvas2DRenderer()
       } else if (forced === 'webgl1') {
