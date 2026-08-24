@@ -5,6 +5,7 @@ import { queryRemoteFonts } from 'lfa-ponyfill'
 import WASM from '../wasm/jassub-worker.js'
 
 import { Canvas2DRenderer } from './renderers/2d-renderer.ts'
+import { CPURenderer } from './renderers/cpu-renderer.ts'
 import { WebGL1Renderer } from './renderers/webgl1-renderer.ts'
 import { WebGL2AtlasRenderer } from './renderers/webgl2-atlas-renderer.ts'
 import { WebGL2Renderer } from './renderers/webgl2-renderer.ts'
@@ -34,7 +35,7 @@ interface opts {
   libassMemoryLimit: number
   libassGlyphLimit: number
   queryFonts: 'local' | 'localandremote' | false
-  renderer?: 'auto' | 'webgl2' | 'webgl2-atlas' | 'webgpu' | 'webgl1' | 'canvas2d'
+  renderer?: 'auto' | 'webgl2' | 'webgl2-atlas' | 'webgpu' | 'webgl1' | 'canvas2d' | 'cpu'
   packed?: boolean
 }
 
@@ -46,7 +47,7 @@ export class ASSRenderer {
   _subtitleColorSpace?: 'BT601' | 'BT709' | 'SMPTE240M' | 'FCC' | null
   _videoColorSpace?: 'BT709' | 'BT601'
   _malloc!: (size: number) => number
-  _gpurender!: WebGL2Renderer | WebGL2AtlasRenderer | WebGPUBatchedRenderer | WebGPUHeadlessRenderer | WebGL1Renderer | Canvas2DRenderer
+  _gpurender!: WebGL2Renderer | WebGL2AtlasRenderer | WebGPUBatchedRenderer | WebGPUHeadlessRenderer | CPURenderer | WebGL1Renderer | Canvas2DRenderer
 
   debug = false
   _packed = true
@@ -75,9 +76,17 @@ export class ASSRenderer {
     // the caller read it back. Awaited rather than fire-and-forget so the renderer is ready before the
     // first draw, since there is no swapchain to absorb an early frame.
     if (!ctrl) {
-      const headless = new WebGPUHeadlessRenderer()
-      await headless.init(data.width, data.height)
-      this._gpurender = headless
+      // WebGPU where it exists (Deno), CPU compositing where it does not (Node, Bun). Both produce the
+      // same premultiplied RGBA for the same frame; only where the blending happens differs.
+      if (navigator.gpu && data.renderer !== 'cpu') {
+        const headless = new WebGPUHeadlessRenderer()
+        await headless.init(data.width, data.height)
+        this._gpurender = headless
+      } else {
+        const cpu = new CPURenderer()
+        cpu.init(data.width, data.height)
+        this._gpurender = cpu
+      }
     } else {
     try {
       const testCanvas = new OffscreenCanvas(1, 1)

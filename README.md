@@ -236,6 +236,29 @@ Two things to know:
 
 Bun is not supported: it has no WebGPU, WebGL or OffscreenCanvas, so there is nothing to composite with.
 
+# Node and Bun
+
+Neither runtime has WebGPU, WebGL or OffscreenCanvas, so there is nothing to composite with on the GPU.
+`jassub/node` composites libass' bitmaps on the CPU instead, and works in both:
+
+```js
+import JASSUB from 'jassub/node'
+
+const subs = await JASSUB.create({ subUrl: './sub.ass', width: 1920, height: 1080 })
+const rgba = await subs.renderFrame(12.5)   // premultiplied RGBA, width * height * 4
+await subs.destroy()
+```
+
+The blending maths mirrors the WebGPU fragment shader, so the output is comparable rather than merely
+similar: `box.ass` at 960x540 gives 714 lit pixels and mean alpha 238.26 in Chrome, Deno, Node and Bun alike.
+
+Renderer choice is by capability, not by runtime name. Neither ships WebGPU today, so `create()` picks CPU
+compositing - but a native binding that installs a spec-shaped `navigator.gpu` is used automatically. Pass
+`renderer: 'cpu'` to pin it.
+
+Both run single-threaded: libass' threads need a cross-origin-isolated page, and Node has no `Worker` global
+at all, which the pthread-enabled build needs to exist even when no thread is ever spawned.
+
 # How to build?
 
 ## Get the Source

@@ -10,6 +10,8 @@
     "dist/jassub.*",
     "dist/debug.*",
     "dist/deno.*",
+    "dist/runtime.*",
+    "dist/node.*",
     "dist/default.woff2",
     "!dist/wasm/jassub-worker-modern.js",
     "README.md",
