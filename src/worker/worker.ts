@@ -7,7 +7,6 @@ import WASM from '../wasm/jassub-worker.js'
 import { Canvas2DRenderer } from './renderers/2d-renderer.ts'
 import { CPURenderer } from './renderers/cpu-renderer.ts'
 import { WebGL1Renderer } from './renderers/webgl1-renderer.ts'
-import { WebGL2AtlasRenderer } from './renderers/webgl2-atlas-renderer.ts'
 import { WebGL2Renderer } from './renderers/webgl2-renderer.ts'
 import { WebGPUBatchedRenderer } from './renderers/webgpu-batched-renderer.ts'
 import { WebGPUBufferHeadlessRenderer } from './renderers/webgpu-buffer-headless-renderer.ts'
@@ -37,7 +36,7 @@ interface opts {
   libassMemoryLimit: number
   libassGlyphLimit: number
   queryFonts: 'local' | 'localandremote' | false
-  renderer?: 'auto' | 'webgl2' | 'webgl2-atlas' | 'webgpu' | 'webgl1' | 'canvas2d' | 'webgpu-buffer' | 'cpu'
+  renderer?: 'auto' | 'webgl2' | 'webgpu' | 'webgl1' | 'canvas2d' | 'webgpu-buffer' | 'cpu'
   /**
    * Loader to use instead of the bundled one. The browser import stays static so bundlers can see it; Node
    * passes the ENVIRONMENT=node build here, which is the one with worker_threads pthread support.
@@ -56,7 +55,7 @@ export class ASSRenderer {
   _subtitleColorSpace?: 'BT601' | 'BT709' | 'SMPTE240M' | 'FCC' | null
   _videoColorSpace?: 'BT709' | 'BT601'
   _malloc!: (size: number) => number
-  _gpurender!: WebGL2Renderer | WebGL2AtlasRenderer | WebGPUBatchedRenderer | WebGPUBufferRenderer | WebGPUBufferHeadlessRenderer | WebGPUHeadlessRenderer | CPURenderer | WebGL1Renderer | Canvas2DRenderer
+  _gpurender!: WebGL2Renderer | WebGPUBatchedRenderer | WebGPUBufferRenderer | WebGPUBufferHeadlessRenderer | WebGPUHeadlessRenderer | CPURenderer | WebGL1Renderer | Canvas2DRenderer
 
   debug = false
   _packed = true
@@ -129,16 +128,19 @@ export class ASSRenderer {
       if (!chosen) {
         try {
           const testCanvas = new OffscreenCanvas(1, 1)
-          if (forced === 'webgpu') {
-            this._gpurender = new WebGPUBatchedRenderer()
-          } else if (forced === 'webgpu-buffer') {
+          // 'webgpu' and 'webgpu-buffer' both land on the storage-buffer renderer here. The array-texture
+          // one is still built and still selectable, but only headless: on a canvas it is no faster than
+          // the buffer renderer and holds ~94.7MB where the buffer path holds ~16MB for the same frame, so
+          // there is nothing left for a browser caller to choose it for. Headless is the other way round -
+          // Deno's wgpu runs the array texture about 8% faster - which is why the class stays.
+          if (forced === 'webgpu' || forced === 'webgpu-buffer') {
             this._gpurender = new WebGPUBufferRenderer()
           } else if (forced === 'canvas2d') {
             this._gpurender = new Canvas2DRenderer()
           } else if (forced === 'webgl1') {
             this._gpurender = new WebGL1Renderer()
           } else if (testCanvas.getContext('webgl2')) {
-            this._gpurender = forced === 'webgl2-atlas' ? new WebGL2AtlasRenderer() : new WebGL2Renderer()
+            this._gpurender = new WebGL2Renderer()
           } else {
             this._gpurender = testCanvas.getContext('webgl')?.getExtension('ANGLE_instanced_arrays') ? new WebGL1Renderer() : new Canvas2DRenderer()
           }
