@@ -40,10 +40,9 @@ export interface JASSUBDenoOptions {
   debug?: boolean
   /**
    * 'auto' (default) renders on the GPU through a storage buffer, which holds a dense frame's bitmaps in
-   * ~16MB. 'webgpu' uses the array-texture renderer instead: about 8% faster here and ~90.5MB, worth it
-   * for a single process and not for eight. 'cpu' pins CPU compositing.
+   * ~16MB. 'cpu' pins CPU compositing.
    */
-  renderer?: 'auto' | 'webgpu' | 'cpu'
+  renderer?: 'auto' | 'cpu'
   /**
    * libass worker threads. Defaults to hardwareConcurrency - 2, capped at 8.
    *

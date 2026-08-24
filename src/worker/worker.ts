@@ -8,10 +8,8 @@ import { Canvas2DRenderer } from './renderers/2d-renderer.ts'
 import { CPURenderer } from './renderers/cpu-renderer.ts'
 import { WebGL1Renderer } from './renderers/webgl1-renderer.ts'
 import { WebGL2Renderer } from './renderers/webgl2-renderer.ts'
-import { WebGPUBatchedRenderer } from './renderers/webgpu-batched-renderer.ts'
 import { WebGPUBufferHeadlessRenderer } from './renderers/webgpu-buffer-headless-renderer.ts'
 import { WebGPUBufferRenderer } from './renderers/webgpu-buffer-renderer.ts'
-import { WebGPUHeadlessRenderer } from './renderers/webgpu-headless-renderer.ts'
 import { _fetch, fetchtext, LIBASS_YCBCR_MAP, THREAD_COUNT, WEIGHT_MAP, type ASSEvent, type ASSImage, type ASSStyle, type WeightValue } from './util.ts'
 
 import type { JASSUB, MainModule } from '../wasm/types.d.ts'
@@ -36,7 +34,7 @@ interface opts {
   libassMemoryLimit: number
   libassGlyphLimit: number
   queryFonts: 'local' | 'localandremote' | false
-  renderer?: 'auto' | 'webgl2' | 'webgpu' | 'webgl1' | 'canvas2d' | 'webgpu-buffer' | 'cpu'
+  renderer?: 'auto' | 'webgl2' | 'webgl1' | 'canvas2d' | 'webgpu-buffer' | 'cpu'
   /**
    * Loader to use instead of the bundled one. The browser import stays static so bundlers can see it; Node
    * passes the ENVIRONMENT=node build here, which is the one with worker_threads pthread support.
@@ -55,7 +53,7 @@ export class ASSRenderer {
   _subtitleColorSpace?: 'BT601' | 'BT709' | 'SMPTE240M' | 'FCC' | null
   _videoColorSpace?: 'BT709' | 'BT601'
   _malloc!: (size: number) => number
-  _gpurender!: WebGL2Renderer | WebGPUBatchedRenderer | WebGPUBufferRenderer | WebGPUBufferHeadlessRenderer | WebGPUHeadlessRenderer | CPURenderer | WebGL1Renderer | Canvas2DRenderer
+  _gpurender!: WebGL2Renderer | WebGPUBufferRenderer | WebGPUBufferHeadlessRenderer | CPURenderer | WebGL1Renderer | Canvas2DRenderer
 
   debug = false
   _packed = true
@@ -87,14 +85,12 @@ export class ASSRenderer {
       // WebGPU where it exists (Deno), CPU compositing where it does not (Node, Bun). Both produce the
       // same premultiplied RGBA for the same frame; only where the blending happens differs.
       if (navigator.gpu && data.renderer !== 'cpu') {
-        // Storage buffer by default: ~16MB against ~90.5MB for the array texture on a dense frame. It is
-        // about 8% slower here, which is the opposite of the browser, where it was equal or faster - Deno
-        // runs wgpu and Chrome runs Dawn, and storage-buffer reads in a fragment shader are not equally
-        // fast on both. Memory wins the default because headless work runs many processes at once, and
-        // eight of them at 90.5MB is most of a GPU. renderer: 'webgpu' picks the faster, larger one.
-        const headless = data.renderer === 'webgpu'
-          ? new WebGPUHeadlessRenderer()
-          : new WebGPUBufferHeadlessRenderer()
+        // Storage buffer, and now the only GPU option: ~16MB against the ~90.5MB the array-texture renderer
+        // needed for the same dense frame. That renderer was kept for a while because it measured faster
+        // under Deno's wgpu, which is what justified carrying two designs at all. Re-measured with the
+        // pipelined readback in place it is 8-10% *slower* on every run, so it was dominated on both axes
+        // and is gone.
+        const headless = new WebGPUBufferHeadlessRenderer()
         await headless.init(data.width, data.height)
         this._gpurender = headless
       } else {
@@ -128,12 +124,7 @@ export class ASSRenderer {
       if (!chosen) {
         try {
           const testCanvas = new OffscreenCanvas(1, 1)
-          // 'webgpu' and 'webgpu-buffer' both land on the storage-buffer renderer here. The array-texture
-          // one is still built and still selectable, but only headless: on a canvas it is no faster than
-          // the buffer renderer and holds ~94.7MB where the buffer path holds ~16MB for the same frame, so
-          // there is nothing left for a browser caller to choose it for. Headless is the other way round -
-          // Deno's wgpu runs the array texture about 8% faster - which is why the class stays.
-          if (forced === 'webgpu' || forced === 'webgpu-buffer') {
+          if (forced === 'webgpu-buffer') {
             this._gpurender = new WebGPUBufferRenderer()
           } else if (forced === 'canvas2d') {
             this._gpurender = new Canvas2DRenderer()

@@ -273,9 +273,9 @@ only the render target differs. Rendering `box.ass` at 960x540 gives byte-for-by
 and mean alpha as Chrome does with the same options.
 
 The GPU path holds a frame's bitmaps in a storage buffer - about 16MB on a dense 1080p frame, against
-~90.5MB for the array-texture renderer. That one is about 8% faster under Deno and available as
-`renderer: 'webgpu'`; the default trades those 8% for memory, because headless rendering tends to run many
-processes at once and eight of them at 90.5MB is most of a GPU.
+~90.5MB for the array-texture design it replaced. That design was kept for a while because it measured
+faster here, but with the pipelined readback in place it is 8-10% slower on every run, so it was dominated
+on both axes and has been removed.
 
 libass runs multi-threaded here too - Deno loads the same `ENVIRONMENT=node` build Node and Bun use. Its own
 web Workers are real and spec-compliant, but the browser build's pthread path traps with "memory access out
