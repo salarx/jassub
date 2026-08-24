@@ -55,8 +55,6 @@ export class CPURenderer {
     // There is no plain-ArrayBuffer alias to switch to, so each bitmap is copied into a plain scratch
     // buffer first. The copy is a native memmove; what it buys is that the inner loop then reads from an
     // ordinary ArrayBuffer. Only done where the source is actually the slow kind, since on Node it is not.
-    const heapBuf = heap.buffer as { growable?: boolean, resizable?: boolean }
-    const slowHeap = heapBuf.growable === true || heapBuf.resizable === true
 
     // an empty frame still has to blank the buffer, or the previous frame's subtitles survive it
     out.fill(0)
@@ -82,19 +80,20 @@ export class CPURenderer {
       const x1 = Math.min(img.w, width - img.dst_x)
       const y1 = Math.min(img.h, height - img.dst_y)
 
-      // copy this bitmap's rows into the scratch buffer, then read them from there
-      let src = heap
-      let base = img.bitmap
-      if (slowHeap) {
-        const need = img.stride * img.h
-        if (this._scratch.length < need) this._scratch = new Uint8Array(need)
-        this._scratch.set(heap.subarray(img.bitmap, img.bitmap + need))
-        src = this._scratch
-        base = 0
-      }
+      // Always copy, never read the wasm heap directly in the loop below.
+      //
+      // Two reasons. The heap is a growable SharedArrayBuffer wherever the build has pthreads, and V8 has
+      // no fast path for per-element reads on those - 6.6x in a micro-benchmark on Deno. And reading
+      // sometimes from the heap and sometimes from a scratch buffer makes this loop polymorphic, which
+      // JavaScriptCore punishes hard and erratically: Bun alternated between 15ms and 57ms for the same
+      // frame across consecutive runs. One buffer type here means one shape, and a steady time.
+      const need = img.stride * img.h
+      if (this._scratch.length < need) this._scratch = new Uint8Array(need)
+      const src = this._scratch
+      src.set(heap.subarray(img.bitmap, img.bitmap + need))
 
       for (let y = y0; y < y1; y++) {
-        let srcIdx = base + y * img.stride + x0
+        let srcIdx = y * img.stride + x0
         let dst = ((img.dst_y + y) * width + img.dst_x + x0) * 4
         for (let x = x0; x < x1; x++, srcIdx++, dst += 4) {
           const mask = src[srcIdx]!
