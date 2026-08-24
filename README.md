@@ -207,6 +207,35 @@ If you want to support even older engines, then please check the [v1.8.8 tag](ht
 
 Support for older browsers (without OffscreenCanvas, WebAssembly threads, etc) has been dropped in v2.0.0 and later.
 
+# Deno
+
+Deno has WebGPU but no DOM, so there is no canvas to present to and no video to drive frames. `jassub/deno`
+renders straight into a texture and hands back the pixels:
+
+```js
+import JASSUB from 'jassub/deno'
+
+const subs = await JASSUB.create({ subUrl: './sub.ass', width: 1920, height: 1080 })
+const rgba = await subs.renderFrame(12.5)   // premultiplied RGBA, width * height * 4
+await subs.destroy()
+```
+
+Run it with `deno run --allow-read --allow-net`, using the `deno.json` in this repo for the npm imports.
+
+The renderer, libass bindings, font handling and colour conversion are the ones the browser build uses -
+only the render target differs. Rendering `box.ass` at 960x540 gives byte-for-byte the same lit-pixel count
+and mean alpha as Chrome does with the same options.
+
+Two things to know:
+
+- **One instance per process.** A second `create()` in the same process fails inside emscripten's pthread
+  setup. Render what you need from one instance, or use a process per job.
+- **Fonts are preloaded, not lazy.** libass resolves fonts on first use, so an on-demand fetch would make the
+  first frame come back empty and only the next one draw. There is no next frame here, so `create()` loads
+  them up front and the first `renderFrame` is correct.
+
+Bun is not supported: it has no WebGPU, WebGL or OffscreenCanvas, so there is nothing to composite with.
+
 # How to build?
 
 ## Get the Source

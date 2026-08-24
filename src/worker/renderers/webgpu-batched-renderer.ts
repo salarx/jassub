@@ -92,6 +92,11 @@ const INSTANCE_FLOATS = 9 // destRect(4) + color(4) + layer(1)
 
 export class WebGPUBatchedRenderer {
   canvas: OffscreenCanvas | null = null
+  // The size actually rendered at. Tracked separately from `canvas` because a headless target has no
+  // canvas, and the resolution uniform must still be right - at 0 the vertex shader divides by zero and
+  // rasterises nothing, which looks exactly like a renderer that silently does not work.
+  targetWidth = 0
+  targetHeight = 0
   device: GPUDevice | null = null
   context: GPUCanvasContext | null = null
   pipeline: GPURenderPipeline | null = null
@@ -139,7 +144,13 @@ export class WebGPUBatchedRenderer {
 
     this.format = navigator.gpu.getPreferredCanvasFormat()
     context.configure({ device, format: this.format, alphaMode: 'premultiplied' })
+    this.targetWidth = canvas.width
+    this.targetHeight = canvas.height
 
+    this._initPipeline(device)
+  }
+
+  _initPipeline (device: GPUDevice) {
     const module = device.createShaderModule({ code: SHADER })
     this.pipeline = device.createRenderPipeline({
       layout: 'auto',
@@ -203,8 +214,8 @@ export class WebGPUBatchedRenderer {
   _writeUniforms () {
     const c = this.colorMatrix
     const u = this.uniformData
-    u[0] = this.canvas?.width ?? 1
-    u[1] = this.canvas?.height ?? 1
+    u[0] = this.targetWidth || 1
+    u[1] = this.targetHeight || 1
     u[4] = c[0]!; u[5] = c[1]!; u[6] = c[2]!
     u[8] = c[3]!; u[9] = c[4]!; u[10] = c[5]!
     u[12] = c[6]!; u[13] = c[7]!; u[14] = c[8]!
@@ -213,8 +224,20 @@ export class WebGPUBatchedRenderer {
 
   resizeCanvas (width: number, height: number) {
     if (!width || !height) return
-    if (this.canvas?.width === width && this.canvas?.height === height) return
+    if (this.targetWidth === width && this.targetHeight === height) return
     this._scheduledResize = { width, height }
+  }
+
+  // Overridden by the headless target, which resizes a texture instead of a canvas.
+  _applyResize (width: number, height: number) {
+    this.canvas!.width = width
+    this.canvas!.height = height
+  }
+
+  // Where this frame is drawn. The canvas path hands back the swapchain texture; a headless target hands
+  // back its own. Returning null skips the frame rather than throwing.
+  _acquireView (): GPUTextureView | null {
+    return this.context ? this.context.getCurrentTexture().createView() : null
   }
 
   setColorMatrix (subtitleColorSpace?: 'BT601' | 'BT709' | 'SMPTE240M' | 'FCC', videoColorSpace?: 'BT601' | 'BT709') {
@@ -223,7 +246,7 @@ export class WebGPUBatchedRenderer {
   }
 
   render (images: ASSImage[], heap: Uint8Array): void {
-    if (!this._ready || !this.device || !this.context || !this.pipeline || !this.texArray) return
+    if (!this._ready || !this.device || !this.pipeline || !this.texArray) return
     const device = this.device
 
     if ((self.HEAPU8RAW.buffer !== self.WASMMEMORY.buffer) || SHOULD_REFERENCE_MEMORY) {
@@ -233,8 +256,9 @@ export class WebGPUBatchedRenderer {
     if (this._scheduledResize) {
       const { width, height } = this._scheduledResize
       this._scheduledResize = undefined
-      this.canvas!.width = width
-      this.canvas!.height = height
+      this._applyResize(width, height)
+      this.targetWidth = width
+      this.targetHeight = height
       this._writeUniforms()
     }
 
@@ -248,7 +272,8 @@ export class WebGPUBatchedRenderer {
       if (img.h > maxH) maxH = img.h
     }
 
-    const view = this.context.getCurrentTexture().createView()
+    const view = this._acquireView()
+    if (!view) return
 
     // An empty frame still has to blank the canvas. The clear only happens as a render pass load op, so
     // returning early here left the previous frame's subtitles on screen after they should have gone.
@@ -270,10 +295,13 @@ export class WebGPUBatchedRenderer {
 
       for (let i = start; i < end; i++) {
         const img = valid[i]!
-        // straight from the WASM heap - bytesPerRow handles libass' stride, no CPU copy
+        // Straight from the WASM heap - bytesPerRow handles libass' stride, no CPU copy.
+        // The view is passed rather than its .buffer: with threads enabled that buffer is a
+        // SharedArrayBuffer, which Deno's WebGPU rejects outright while Chrome accepts it. `heap` spans the
+        // whole heap at byteOffset 0, so this is the same bytes and the same offset, and allocates nothing.
         device.queue.writeTexture(
           { texture: this.texArray, origin: { x: 0, y: 0, z: n } },
-          heap.buffer as ArrayBuffer,
+          heap,
           { offset: img.bitmap, bytesPerRow: img.stride, rowsPerImage: img.h },
           { width: img.w, height: img.h, depthOrArrayLayers: 1 }
         )

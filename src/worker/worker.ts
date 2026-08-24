@@ -9,6 +9,7 @@ import { WebGL1Renderer } from './renderers/webgl1-renderer.ts'
 import { WebGL2AtlasRenderer } from './renderers/webgl2-atlas-renderer.ts'
 import { WebGL2Renderer } from './renderers/webgl2-renderer.ts'
 import { WebGPUBatchedRenderer } from './renderers/webgpu-batched-renderer.ts'
+import { WebGPUHeadlessRenderer } from './renderers/webgpu-headless-renderer.ts'
 import { _fetch, fetchtext, LIBASS_YCBCR_MAP, THREAD_COUNT, WEIGHT_MAP, type ASSEvent, type ASSImage, type ASSStyle, type WeightValue } from './util.ts'
 
 import type { JASSUB, MainModule } from '../wasm/types.d.ts'
@@ -45,16 +46,16 @@ export class ASSRenderer {
   _subtitleColorSpace?: 'BT601' | 'BT709' | 'SMPTE240M' | 'FCC' | null
   _videoColorSpace?: 'BT709' | 'BT601'
   _malloc!: (size: number) => number
-  _gpurender!: WebGL2Renderer | WebGL2AtlasRenderer | WebGPUBatchedRenderer | WebGL1Renderer | Canvas2DRenderer
+  _gpurender!: WebGL2Renderer | WebGL2AtlasRenderer | WebGPUBatchedRenderer | WebGPUHeadlessRenderer | WebGL1Renderer | Canvas2DRenderer
 
   debug = false
   _packed = true
 
-  constructor (...args: [data: opts, getFont: (font: string, weight: WeightValue) => Promise<Uint8Array<ArrayBuffer> | undefined>, ctrl: OffscreenCanvas]) {
+  constructor (...args: [data: opts, getFont: (font: string, weight: WeightValue) => Promise<Uint8Array<ArrayBuffer> | undefined>, ctrl?: OffscreenCanvas]) {
     return this[constructor](...args).catch(console.error) as unknown as this
   }
 
-  async [constructor] (data: opts, getFont: (font: string, weight: WeightValue) => Promise<Uint8Array<ArrayBuffer> | undefined>, ctrl: OffscreenCanvas) {
+  async [constructor] (data: opts, getFont: (font: string, weight: WeightValue) => Promise<Uint8Array<ArrayBuffer> | undefined>, ctrl?: OffscreenCanvas) {
     // remove case sensitivity
     this._availableFonts = Object.fromEntries(Object.entries(data.availableFonts).map(([k, v]) => [k.trim().toLowerCase(), v]))
     this._packed = data.packed !== false
@@ -70,6 +71,14 @@ export class ASSRenderer {
     // const devicePromise = navigator.gpu?.requestAdapter({
     //   powerPreference: 'high-performance'
     // }).then(adapter => adapter?.requestDevice())
+    // No canvas: a runtime with WebGPU but no canvas at all, which is Deno. Render into a texture and let
+    // the caller read it back. Awaited rather than fire-and-forget so the renderer is ready before the
+    // first draw, since there is no swapchain to absorb an early frame.
+    if (!ctrl) {
+      const headless = new WebGPUHeadlessRenderer()
+      await headless.init(data.width, data.height)
+      this._gpurender = headless
+    } else {
     try {
       const testCanvas = new OffscreenCanvas(1, 1)
       const forced = data.renderer && data.renderer !== 'auto' ? data.renderer : null
@@ -89,6 +98,7 @@ export class ASSRenderer {
     }
 
     this._gpurender.setCanvas(ctrl)
+    }
 
     // The track fetch, the WASM instantiation and the font downloads are all independent, but used to run
     // strictly in series, so time to first subtitle was their sum. Start the track download now and await it
