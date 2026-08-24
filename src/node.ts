@@ -129,6 +129,17 @@ export default class JASSUBNode {
     return await (this._renderer._gpurender as CPURenderer).read()
   }
 
+  /**
+   * Render many timestamps. Present for API parity with the Deno entry, where it overlaps each frame's GPU
+   * readback with the next frame's work. CPU compositing has the pixels already, so there is nothing to
+   * overlap here and this is simply a loop.
+   *
+   * Each buffer is only valid until the next iteration - copy it if you need to keep it.
+   */
+  async * renderFrames (times: Iterable<number>): AsyncGenerator<Uint8Array> {
+    for (const t of times) yield await this.renderFrame(t)
+  }
+
   /** Change the render resolution. */
   resize (width: number, height: number) {
     this.width = width
