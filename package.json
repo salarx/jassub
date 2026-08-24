@@ -14,6 +14,7 @@
     "dist/node.*",
     "dist/default.woff2",
     "!dist/wasm/jassub-worker-modern.js",
+    "!dist/wasm/jassub-worker-simd.js",
     "README.md",
     "LICENSE",
     "index.d.ts",
@@ -25,7 +26,7 @@
     "dev": "vite --host",
     "docker:build": "docker build -t thaunknown/jassub-build .",
     "docker:run": "docker run -it --rm -v ${PWD}:/code --name thaunknown_jassub-build thaunknown/jassub-build:latest",
-    "prepack": "npm run build && cp src/wasm/jassub-worker.wasm src/wasm/jassub-worker-modern.wasm dist/wasm/ && cp src/default.woff2 dist/default.woff2"
+    "prepack": "npm run build && cp src/wasm/jassub-worker.wasm src/wasm/jassub-worker-modern.wasm src/wasm/jassub-worker-simd.wasm src/wasm/jassub-worker-node.wasm src/wasm/jassub-worker-node.mjs dist/wasm/ && cp src/default.woff2 dist/default.woff2"
   },
   "repository": {
     "type": "git",
