@@ -89,12 +89,29 @@ export class ASSRenderer {
         this._gpurender = cpu
       }
     } else {
-      // The storage-buffer WebGPU renderer is NOT the default, despite being the fastest and much the
-      // smallest of the three. It renders one frame of the kusriya track differently from every other
-      // backend - one frame out of nineteen, on one track - and an unexplained pixel difference is not
-      // something to hand to every user by default. Selectable with renderer: 'webgpu-buffer'.
+      // Default to the storage-buffer WebGPU renderer. It holds a frame's bitmaps in about 16MB where the
+      // array-texture designs need 90.5MB for the same content, and it is no slower.
+      //
+      // It differs from the other backends by exactly one pixel, in one channel, by 1/255, on one frame of
+      // the kusriya track - deterministically. That is rounding, not rendering: the shader converts the
+      // coverage byte with f32(b)/255 where a texture fetch has the hardware do it, and across 624
+      // overlapping blends one pixel lands a step apart. It is the same magnitude already accepted for
+      // WebGPU on AMD in BENCHMARKS.md.
+      //
+      // Chosen here rather than asked for by name, so it has to prove it works: a WebGPU device that fails
+      // to come up would otherwise leave a renderer attached that draws nothing, which is a worse failure
+      // than being slower. Anything that goes wrong falls through to the WebGL2 path below.
       const forced = data.renderer && data.renderer !== 'auto' ? data.renderer : null
-      {
+      let chosen = false
+      if (!forced && await WebGPUBufferRenderer.isSupported()) {
+        const gpu = new WebGPUBufferRenderer()
+        if (await gpu.trySetCanvas(ctrl)) {
+          this._gpurender = gpu
+          chosen = true
+        }
+      }
+
+      if (!chosen) {
         try {
           const testCanvas = new OffscreenCanvas(1, 1)
           if (forced === 'webgpu') {

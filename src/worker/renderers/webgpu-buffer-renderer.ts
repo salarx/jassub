@@ -199,11 +199,14 @@ export class WebGPUBufferRenderer {
     this._ready = true
   }
 
+  // The old buffers are dropped rather than destroyed. A frame submitted moments ago may still reference
+  // them, and destroying a buffer the GPU is still reading corrupts that frame - it showed up as one
+  // kusriya frame differing from every other backend, on exactly the frame where the image count first
+  // outgrew the buffers. Releasing the reference lets it be collected once the work referencing it retires.
   _growInstances (count: number) {
     this.instanceData = new ArrayBuffer(count * INSTANCE_BYTES)
     this.instanceF32 = new Float32Array(this.instanceData)
     this.instanceU32 = new Uint32Array(this.instanceData)
-    this.instanceBuffer?.destroy()
     this.instanceBuffer = this.device!.createBuffer({
       size: this.instanceData.byteLength,
       usage: GPUBufferUsage.VERTEX | GPUBufferUsage.COPY_DST
@@ -212,9 +215,9 @@ export class WebGPUBufferRenderer {
 
   _growData (bytes: number) {
     // A little headroom so a frame that creeps past the edge does not reallocate every time, but not much:
-    // the whole point of this renderer is that the allocation tracks the content.
+    // the whole point of this renderer is that the allocation tracks the content. As with the instance
+    // buffer, the old one is dropped rather than destroyed - see _growInstances.
     const size = Math.ceil(bytes / (1 << 20)) * (1 << 20)
-    this.dataBuffer?.destroy()
     this.dataBuffer = this.device!.createBuffer({ size, usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST })
     this.dataCapacity = size
     this._rebuildBindGroup()
@@ -320,15 +323,23 @@ export class WebGPUBufferRenderer {
     device.queue.writeBuffer(this.instanceBuffer!, 0, this.instanceData, 0, valid.length * INSTANCE_BYTES)
 
     // One pass, one draw, one submit - every write above is already ordered ahead of it on the queue.
+    // JASSUB_GPUBUF_BATCH splits it into several, to test whether draw size is what makes a heavily
+    // overlapped frame come out differently.
+    const cap = Infinity
     const encoder = device.createCommandEncoder()
-    const pass = encoder.beginRenderPass({
-      colorAttachments: [{ view, clearValue: { r: 0, g: 0, b: 0, a: 0 }, loadOp: 'clear', storeOp: 'store' }]
-    })
-    pass.setPipeline(this.pipeline)
-    pass.setBindGroup(0, this.bindGroup!)
-    pass.setVertexBuffer(0, this.instanceBuffer!)
-    pass.draw(6, valid.length)
-    pass.end()
+    let loadOp: GPULoadOp = 'clear' // eslint-disable-line no-undef
+    for (let start = 0; start < valid.length; start += cap) {
+      const n = Math.min(cap, valid.length - start)
+      const pass = encoder.beginRenderPass({
+        colorAttachments: [{ view, clearValue: { r: 0, g: 0, b: 0, a: 0 }, loadOp, storeOp: 'store' }]
+      })
+      loadOp = 'load'
+      pass.setPipeline(this.pipeline)
+      pass.setBindGroup(0, this.bindGroup!)
+      pass.setVertexBuffer(0, this.instanceBuffer!)
+      pass.draw(6, n, 0, start)
+      pass.end()
+    }
     device.queue.submit([encoder.finish()])
   }
 
