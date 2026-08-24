@@ -14,18 +14,28 @@ export function installRuntimeShims () {
   // pre-worker.js calls `self.name.startsWith(...)`; outside a Worker there is no name at all
   if (typeof g.name !== 'string') g.name = ''
 
+  const hasRealWorker = typeof g.Worker === 'function'
+
   // Node has no Worker global, and the pthread-enabled emscripten output evaluates
   // `class ... extends Worker` at module scope, which throws before anything can be configured.
-  // THREAD_COUNT is 1 outside a cross-origin-isolated page, so no thread is ever actually spawned - the
-  // class only has to exist for that declaration to evaluate. Throwing on construction is deliberate: if a
-  // build ever does try to spawn a thread, it should say so rather than fail somewhere unrecognisable.
-  if (typeof g.Worker === 'undefined') {
+  // The class only has to exist for that declaration to evaluate. Throwing on construction is deliberate:
+  // if a build ever does try to spawn a thread, it should say so rather than fail somewhere unrecognisable.
+  if (!hasRealWorker) {
     g.Worker = class Worker {
       constructor () {
         throw new Error('jassub: this runtime has no Worker, so libass threads are unavailable. This build runs single-threaded.')
       }
     }
   }
+
+  // Threads stay off here, and not because these runtimes lack threading - both have it, and both have
+  // SharedArrayBuffer unconditionally. libass' thread count is gated on `crossOriginIsolated`, and forcing
+  // that true is not enough: emscripten decides a spawned worker is a pthread from
+  // `globalThis.WorkerGlobalScope` and `globalThis.name`, and Bun's workers expose neither, so every
+  // pthread starts up believing it is the main thread and is torn down again ("Worker has been
+  // terminated"). Node has no web Worker at all. Enabling threads needs a worker-side bootstrap that
+  // supplies those globals before the emscripten module evaluates; until that exists, single-threaded is
+  // the honest configuration rather than a broken one.
 }
 
 /**
