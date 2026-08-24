@@ -19,6 +19,7 @@ export class CPURenderer {
   height = 0
   pixels: Uint8ClampedArray = new Uint8ClampedArray(0)
   colorMatrix: Float32Array = IDENTITY_MATRIX
+  _scratch: Uint8Array = new Uint8Array(0)
   _ready = false
 
   init (width: number, height: number) {
@@ -45,6 +46,18 @@ export class CPURenderer {
     if (!this._ready) return
     const { width, height } = this
     const out = this.pixels
+
+    // Where the wasm heap is a growable SharedArrayBuffer - which it is whenever the build has pthreads -
+    // V8 has no fast path for per-element typed-array reads. The same read loop micro-benchmarks 1.7x
+    // slower on Node and 6.6x on Deno, and it showed up here as compositing costing 61ms in Deno against
+    // 15ms in Node on identical libass output.
+    //
+    // There is no plain-ArrayBuffer alias to switch to, so each bitmap is copied into a plain scratch
+    // buffer first. The copy is a native memmove; what it buys is that the inner loop then reads from an
+    // ordinary ArrayBuffer. Only done where the source is actually the slow kind, since on Node it is not.
+    const heapBuf = heap.buffer as { growable?: boolean, resizable?: boolean }
+    const slowHeap = heapBuf.growable === true || heapBuf.resizable === true
+
     // an empty frame still has to blank the buffer, or the previous frame's subtitles survive it
     out.fill(0)
     if (!images.length) return
@@ -69,11 +82,22 @@ export class CPURenderer {
       const x1 = Math.min(img.w, width - img.dst_x)
       const y1 = Math.min(img.h, height - img.dst_y)
 
+      // copy this bitmap's rows into the scratch buffer, then read them from there
+      let src = heap
+      let base = img.bitmap
+      if (slowHeap) {
+        const need = img.stride * img.h
+        if (this._scratch.length < need) this._scratch = new Uint8Array(need)
+        this._scratch.set(heap.subarray(img.bitmap, img.bitmap + need))
+        src = this._scratch
+        base = 0
+      }
+
       for (let y = y0; y < y1; y++) {
-        let src = img.bitmap + y * img.stride + x0
+        let srcIdx = base + y * img.stride + x0
         let dst = ((img.dst_y + y) * width + img.dst_x + x0) * 4
-        for (let x = x0; x < x1; x++, src++, dst += 4) {
-          const mask = heap[src]!
+        for (let x = x0; x < x1; x++, srcIdx++, dst += 4) {
+          const mask = src[srcIdx]!
           if (mask === 0) continue
           const a = colorAlpha * (mask / 255)
           const inv = 1 - a

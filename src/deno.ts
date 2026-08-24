@@ -38,6 +38,8 @@ export interface JASSUBDenoOptions {
   libassMemoryLimit?: number
   libassGlyphLimit?: number
   debug?: boolean
+  /** 'auto' (default) uses Deno's WebGPU; 'cpu' pins CPU compositing, mainly useful for comparing them. */
+  renderer?: 'auto' | 'cpu'
 }
 
 export default class JASSUBDeno {
@@ -102,7 +104,7 @@ export default class JASSUBDeno {
       libassGlyphLimit: opts.libassGlyphLimit ?? 0,
       // there are no local fonts to query outside a browser
       queryFonts: false,
-      renderer: 'webgpu',
+      renderer: opts.renderer === 'cpu' || !navigator.gpu ? 'cpu' : 'webgpu',
       packed: true
     } as never, async () => undefined) as unknown as Promise<ASSRenderer>)
 
