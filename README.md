@@ -256,8 +256,11 @@ Renderer choice is by capability, not by runtime name. Neither ships WebGPU toda
 compositing - but a native binding that installs a spec-shaped `navigator.gpu` is used automatically. Pass
 `renderer: 'cpu'` to pin it.
 
-Both run single-threaded: libass' threads need a cross-origin-isolated page, and Node has no `Worker` global
-at all, which the pthread-enabled build needs to exist even when no thread is ever spawned.
+Both run single-threaded. Not for want of threading - both runtimes have it, and both have
+`SharedArrayBuffer` unconditionally - but emscripten recognises a pthread worker by globals that neither
+supplies, and Node has no web `Worker` at all. There is an unfinished bootstrap behind `JASSUB_THREADS=1`
+that gets Bun as far as loading the module in all eight workers before the handshake fails; it is off by
+default because it does not work.
 
 Bun gets its own wasm build. It has no relaxed SIMD, so it cannot load the modern binary at all, and before
 this it fell back to the scalar one and spent 60.9 ms per frame in libass against Node's 18.0 ms. On the

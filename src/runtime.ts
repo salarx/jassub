@@ -28,38 +28,107 @@ export function installRuntimeShims () {
     }
   }
 
-  // Threads stay off here, and not because these runtimes lack threading - both have it, and both have
-  // SharedArrayBuffer unconditionally. libass' thread count is gated on `crossOriginIsolated`, and forcing
-  // that true is not enough: emscripten decides a spawned worker is a pthread from
-  // `globalThis.WorkerGlobalScope` and `globalThis.name`, and Bun's workers expose neither, so every
+  installFetchFileSupport(g)
+
+  // libass' thread count is gated on `crossOriginIsolated`, which asks a browser question - is
+  // SharedArrayBuffer safe here - that has no meaning on a server, where it always is. Answering it
+  // honestly is necessary but not sufficient: emscripten recognises a spawned worker as a pthread from
+  // `globalThis.WorkerGlobalScope` and `globalThis.name`, and Bun's workers are handed neither, so each
   // pthread starts up believing it is the main thread and is torn down again ("Worker has been
-  // terminated"). Node has no web Worker at all. Enabling threads needs a worker-side bootstrap that
-  // supplies those globals before the emscripten module evaluates; until that exists, single-threaded is
-  // the honest configuration rather than a broken one.
+  // terminated"). The bootstrap below supplies both before the emscripten module evaluates.
+  // Opt-in with JASSUB_THREADS=1. Off by default because it does not work yet - see installPthreadBootstrap.
+  const env = (globalThis as { process?: { env?: Record<string, string | undefined> } }).process?.env
+  if (hasRealWorker && typeof SharedArrayBuffer !== 'undefined' && env?.JASSUB_THREADS === '1') {
+    installPthreadBootstrap(g)
+    if (g.crossOriginIsolated === undefined) {
+      Object.defineProperty(globalThis, 'crossOriginIsolated', { value: true, configurable: true })
+    }
+  }
 }
 
 /**
- * Turn a `file:` URL into something fetch will accept.
+ * Wrap Worker so pthread workers start from a shim rather than from the emscripten module directly.
  *
- * fetch handles http, https, data and blob, but not file: - in Node, Bun and Deno alike - and the wasm
- * binary, the default font and any local track normally sit on disk. Reading them and handing back a blob:
- * URL keeps the loader underneath doing a plain fetch, with no runtime-specific branch of its own.
+ * jassub already patches Worker to smuggle the wasm URL through the worker name, and extern-pre-worker.js
+ * reads it back out on the other side. That channel only works where the runtime propagates `name` to the
+ * worker, which Bun does not, and it is not enough on its own because emscripten also needs
+ * `WorkerGlobalScope` to exist to conclude it is in a worker at all.
+ *
+ * The values are baked into a blob module rather than passed as query parameters: a Bun worker has no
+ * `location`, so there would be nothing to read them back from.
+ *
+ * This is not finished. With it in place Bun spawns all eight pthread workers, each one loads the
+ * emscripten module without error, and `extern-pre-worker.js` normalises the name as it should - verified
+ * in isolation and by instrumenting the real run. The main thread then fails posting the compiled module
+ * to them with "Worker has been terminated", and a keepalive timer in the worker does not prevent it, so
+ * something about Bun's worker lifetime ends them before the handshake completes. Left here, behind
+ * JASSUB_THREADS=1, because the remaining problem is that last step rather than any of the plumbing.
  */
-export async function toFetchable (url: string): Promise<string> {
-  if (!url.startsWith('file:')) return url
-  const bytes = await readLocalFile(url)
-  // The type matters: the wasm loader uses instantiateStreaming, which rejects anything not served as
-  // application/wasm, and a Blob built without one has no content type at all.
-  const type = url.endsWith('.wasm') ? 'application/wasm' : 'application/octet-stream'
-  return URL.createObjectURL(new Blob([bytes as unknown as BlobPart], { type }))
+function installPthreadBootstrap (g: Record<string, unknown>) {
+  const Native = g.Worker as new (url: string | URL, options?: object) => unknown
+  if ((Native as { _jassubPatched?: boolean })._jassubPatched) return
+
+  class PatchedWorker extends (Native as new (url: string | URL, options?: object) => object) {
+    constructor (scriptURL: string | URL, options: { name?: string, type?: string } = {}) {
+      const name = options.name ?? ''
+      // only pthread workers need the shim; anything else the host spawns is left alone
+      if (!name.startsWith('em-pthread')) {
+        super(scriptURL, options)
+        return
+      }
+      const src = [
+        "Object.defineProperty(globalThis, 'WorkerGlobalScope', { value: function WorkerGlobalScope () {}, configurable: true })",
+        `globalThis.name = ${JSON.stringify(name)}`,
+        'globalThis.self = globalThis',
+        // each worker is its own realm, so the file: support has to be installed again in here
+        FETCH_FILE_SHIM,
+        // Hold the event loop open. Bun tears down a worker once its module finishes and nothing is
+        // pending; an onmessage handler alone does not count, so the pthread would be terminated before
+        // the main thread ever posts it the compiled module.
+        'globalThis.__jassubKeepAlive = setInterval(() => {}, 2147483647)',
+        `await import(${JSON.stringify(String(scriptURL))})`
+      ].join('\n')
+      const url = URL.createObjectURL(new Blob([src], { type: 'text/javascript' }))
+      super(url, { ...options, type: 'module' })
+    }
+  }
+  ;(PatchedWorker as unknown as { _jassubPatched: boolean })._jassubPatched = true
+  g.Worker = PatchedWorker
 }
 
-async function readLocalFile (url: string): Promise<Uint8Array> {
-  const deno = (globalThis as { Deno?: { readFile: (p: URL) => Promise<Uint8Array> } }).Deno
-  if (deno) return await deno.readFile(new URL(url))
-  // @ts-expect-error node types are not a dependency of this package; this path only runs on Node/Bun
-  const { readFile } = await import('node:fs/promises')
-  return new Uint8Array(await readFile(new URL(url)))
+// Teach fetch to serve file: URLs. Node, Bun and Deno all reject them, and the wasm binary, the default
+// font and any local track normally sit on disk.
+//
+// This replaces an earlier approach of rewriting those URLs to blob: ones. Blob URLs are scoped to the
+// realm that created them, so the moment libass spawned pthread workers they could not fetch the wasm the
+// main thread had registered, and every worker died on startup - reported only as "Worker has been
+// terminated" from a postMessage several frames away.
+const FETCH_FILE_SHIM = `
+const _fetch = globalThis.fetch
+globalThis.fetch = async (input, init) => {
+  const url = typeof input === 'string' ? input : input?.url ?? String(input)
+  if (!url.startsWith('file:')) return _fetch(input, init)
+  const bytes = globalThis.Deno
+    ? await globalThis.Deno.readFile(new URL(url))
+    : new Uint8Array(await (await import('node:fs/promises')).readFile(new URL(url)))
+  const type = url.endsWith('.wasm') ? 'application/wasm' : 'application/octet-stream'
+  return new Response(bytes, { headers: { 'content-type': type } })
+}
+`
+
+function installFetchFileSupport (g: Record<string, unknown>) {
+  if (g.__jassubFetchPatched) return
+  g.__jassubFetchPatched = true
+  // eslint-disable-next-line no-new-func
+  new Function(FETCH_FILE_SHIM)()
+}
+
+/**
+ * Kept for API compatibility: file: URLs now work through fetch directly, so this passes them through.
+ * Callers still route user-supplied URLs through it so the behaviour stays in one place.
+ */
+export async function toFetchable (url: string): Promise<string> {
+  return url
 }
 
 /**
