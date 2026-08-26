@@ -20,6 +20,8 @@ export class WebGPUBufferHeadlessRenderer extends WebGPUBufferRenderer {
   targets: Array<GPUTexture | null> = [null, null]
   _readBuffers: Array<GPUBuffer | null> = [null, null]
   _readBufferSizes = [0, 0]
+  // reused across frames, one per slot - see beginRead
+  _outBuffers: Array<Uint8Array | null> = [null, null]
   // which slot the next render draws into
   _slot = 0
 
@@ -55,6 +57,7 @@ export class WebGPUBufferHeadlessRenderer extends WebGPUBufferRenderer {
       this._readBuffers[i]?.destroy()
       this._readBuffers[i] = null
       this._readBufferSizes[i] = 0
+      this._outBuffers[i] = null
     }
     this._slot = 0
   }
@@ -68,6 +71,16 @@ export class WebGPUBufferHeadlessRenderer extends WebGPUBufferRenderer {
    *
    * The caller may render the next frame immediately - it goes to the other slot - but must await this
    * promise before rendering the frame after that, or it would overwrite a texture still being copied.
+   *
+   * The returned buffer is reused, and is valid only until this slot comes round again - two frames. That
+   * matches the CPU compositor, whose read() hands back a view straight onto the buffer it composites
+   * into. The two used to disagree: this allocated 8.3MB a frame and stayed valid indefinitely while the
+   * CPU path aliased, under the same doc line telling callers to copy. Code written against Deno then
+   * returned N copies of the last frame on Node, with nothing to indicate it.
+   *
+   * One buffer per slot rather than one shared, because renderFrames keeps two of these promises in
+   * flight: a single scratch would let the newer frame's copy land on the older one before the caller
+   * ever saw it.
    */
   beginRead (): Promise<Uint8Array> {
     const device = this.device
@@ -99,7 +112,8 @@ export class WebGPUBufferHeadlessRenderer extends WebGPUBufferRenderer {
 
     return buffer.mapAsync(GPUMapMode.READ, 0, size).then(() => {
       const mapped = new Uint8Array(buffer.getMappedRange(0, size))
-      const out = new Uint8Array(unpadded * height)
+      let out = this._outBuffers[slot]
+      if (!out || out.length !== unpadded * height) out = this._outBuffers[slot] = new Uint8Array(unpadded * height)
       if (padded === unpadded) {
         out.set(mapped.subarray(0, out.length))
       } else {
@@ -123,6 +137,7 @@ export class WebGPUBufferHeadlessRenderer extends WebGPUBufferRenderer {
       this.targets[i] = null
       this._readBuffers[i]?.destroy()
       this._readBuffers[i] = null
+      this._outBuffers[i] = null
     }
     super.destroy()
   }
