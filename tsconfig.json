@@ -25,6 +25,9 @@
   ],
   "exclude": [
     "src/worker/pre-worker.js",
-    "src/wasm/jassub-worker-modern.js"
+    "src/wasm/jassub-worker-modern.js",
+    "src/wasm/jassub-worker-simd.js",
+    "src/wasm/jassub-worker-node.mjs",
+    "src/worker/extern-pre-node.js"
   ]
 }
