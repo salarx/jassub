@@ -13,7 +13,6 @@ import { WebGPUBufferRenderer } from './renderers/webgpu-buffer-renderer.ts'
 import { _fetch, fetchtext, LIBASS_YCBCR_MAP, THREAD_COUNT, WEIGHT_MAP, type ASSEvent, type ASSImage, type ASSStyle, type WeightValue } from './util.ts'
 
 import type { JASSUB, MainModule } from '../wasm/types.d.ts'
-// import { WebGPURenderer } from './webgpu-renderer'
 
 declare const self: DedicatedWorkerGlobalScope &
   typeof globalThis & {
