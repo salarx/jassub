@@ -1,7 +1,20 @@
 // fallback for browsers that don't support GPU acceleration
 import { colorMatrixConversionMap, IDENTITY_MATRIX, type ASSImage } from '../util.ts'
 
-// matrix output is a 0-1 channel; the conversion can push slightly outside that, so clamp before scaling
+// Matrix output is a 0-1 channel and the conversion can push outside that, so it is clamped before being
+// scaled to a byte.
+//
+// Worth knowing what that costs, because it is the one place this renderer cannot match the others. Here
+// the colour is clamped and then the canvas multiplies by alpha, so the result is clamp(corrected) * a.
+// Every GPU renderer writes corrected * a into an rgba8unorm target, so theirs is clamp(corrected * a).
+// Those agree until a channel exceeds 1.0 - and BT709 -> BT601 does: green is 0.0784r + 1.1722g + 0.0322b,
+// which reaches 1.2828 on white. Sweeping the whole cube against both formulas, the worst case is 56/255
+// on green, at rgb(245,255,250) with coverage 0.78, where the GPU saturates to 255 and this returns 199.
+//
+// Only at partial coverage - antialiased glyph edges - since at full alpha both clamp to 255. And not
+// fixable in this representation: ImageData is non-premultiplied 8-bit, stored by putImageData and
+// premultiplied by the browser at drawImage time, so the clamp has to happen before the multiply. Undoing
+// it would mean a divide per pixel on a path that is already the no-GPU fallback.
 const clamp = (v: number) => (v < 0 ? 0 : v > 1 ? 255 : Math.round(v * 255))
 
 export class Canvas2DRenderer {
