@@ -20,6 +20,9 @@
     "./package.json": "./package.json"
   },
   "type": "module",
+  "engines": {
+    "node": ">=22"
+  },
   "files": [
     "dist/wasm/*",
     "dist/worker/*",
