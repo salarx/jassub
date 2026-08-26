@@ -44,41 +44,8 @@ threads to one. Nothing else in this library comes close for the effort - two re
 change. If subtitle rendering feels heavy in a browser, check `crossOriginIsolated` in the console before
 looking anywhere else; `false` means you are on one thread.
 
-Setting them, for a few common hosts:
-
-```
-# Netlify, Cloudflare Pages - _headers
-/*
-  Cross-Origin-Opener-Policy: same-origin
-  Cross-Origin-Embedder-Policy: require-corp
-```
-
-```js
-// Express
-app.use((req, res, next) => {
-  res.set('Cross-Origin-Opener-Policy', 'same-origin')
-  res.set('Cross-Origin-Embedder-Policy', 'require-corp')
-  next()
-})
-```
-
-```nginx
-add_header Cross-Origin-Opener-Policy same-origin;
-add_header Cross-Origin-Embedder-Policy require-corp;
-```
-
-**`require-corp` will break cross-origin subresources that have not opted in**, and for a video player that
-usually means the video itself. Every cross-origin image, font, subtitle and media file then needs either
-`Cross-Origin-Resource-Policy: cross-origin` from the origin serving it, or CORS plus a `crossorigin`
-attribute on the element. If the media is on a CDN you do not control, check this before shipping the
-headers - the failure is the asset not loading at all, not subtitles being slow.
-
-`Cross-Origin-Embedder-Policy: credentialless` is the softer option: it drops the CORP requirement by
-sending cross-origin requests without credentials. Support is narrower, and anything that needs cookies to
-fetch - signed URLs are usually fine, cookie-authenticated media is not - will fail instead.
-
-`Cross-Origin-Opener-Policy: same-origin` also severs `window.opener`, so OAuth popups and similar flows
-are worth testing once the headers are on.
+The full recipe - per-host header config, what `require-corp` breaks, and the softer `credentialless`
+option - is in [docs/cross-origin-isolation.md](docs/cross-origin-isolation.md).
 
 At minimum WASM + TextDecoder + OffscreenCanvas + Web Workers + Proxy + Fetch + Promise + getVideoPlaybackQuality/requestVideoFrameCallback are required for JASSUB to work.
 
@@ -110,7 +77,7 @@ Install the library via:
 ```
 
 ```js
-import JASSUB from 'jassub'
+import JASSUB from '@salarx/jassub'
 
 const instance = new JASSUB({
   video: document.querySelector('video'),
@@ -121,15 +88,17 @@ const instance = new JASSUB({
 If you use a custom bundler, and need to override the worker and wasm URLs you can instead do:
 
 ```js
-import JASSUB from 'jassub'
-import workerUrl from 'jassub/dist/jassub-worker.js?worker&url'
-import wasmUrl from 'jassub/dist/jassub-worker.wasm?url' // non-SIMD fallback
-import modernWasmUrl from 'jassub/dist/jassub-worker-modern.wasm?url' // SIMD
+import JASSUB from '@salarx/jassub'
+import workerUrl from '@salarx/jassub/dist/jassub-worker.js?worker&url'
+import wasmUrl from '@salarx/jassub/dist/jassub-worker.wasm?url' // non-SIMD fallback
+import modernWasmUrl from '@salarx/jassub/dist/jassub-worker-modern.wasm?url' // relaxed SIMD
+import simdWasmUrl from '@salarx/jassub/dist/jassub-worker-simd.wasm?url' // fixed-width SIMD
 
 const instance = new JASSUB({
   video: document.querySelector('video'),
   subContent: subtitleString,
-  workerUrl, // you can also use: `new URL('jassub/dist/jassub-worker.js', import.meta.url)` instead of importing it as an url, or whatever solution suits you
+  simdWasmUrl,
+  workerUrl, // you can also use: `new URL('@salarx/jassub/dist/jassub-worker.js', import.meta.url)` instead of importing it as an url, or whatever solution suits you
   wasmUrl,
   modernWasmUrl
 })
@@ -142,7 +111,7 @@ However this shoud almost never be necessary.
 You're also able to use it without any video. However, that requires you to set the time the subtitles should render at yourself:
 
 ```js
-import JASSUB from 'jassub'
+import JASSUB from '@salarx/jassub'
 
 const instance = new JASSUB({
   canvas: document.querySelector('canvas'),
@@ -249,177 +218,12 @@ If you want to support even older engines, then please check the [v1.8.8 tag](ht
 
 Support for older browsers (without OffscreenCanvas, WebAssembly threads, etc) has been dropped in v2.0.0 and later.
 
-# Deno
+# Outside the browser
 
-Deno has WebGPU but no DOM, so there is no canvas to present to and no video to drive frames. `jassub/deno`
-renders straight into a texture and hands back the pixels:
+JASSUB also runs in Deno, Node and Bun, rendering straight to an RGBA buffer with no canvas and real
+libass threads. See [docs/server-runtimes.md](docs/server-runtimes.md).
 
-```js
-import JASSUB from 'jassub/deno'
+# Building
 
-const subs = await JASSUB.create({ subUrl: './sub.ass', width: 1920, height: 1080 })
-const rgba = await subs.renderFrame(12.5)   // premultiplied RGBA, width * height * 4
-await subs.destroy()
-```
-
-Run it with `deno run --allow-read --allow-sys`, using the `deno.json` in this repo for the npm imports.
-`--allow-sys` is not optional: emscripten asks the OS for the core count while the module is still
-instantiating, so without it startup fails with `Requires sys access to "cpus"` before any of your code
-runs. Add `--allow-net` only if the track or fonts are remote, and `--allow-ffi --unstable-webgpu` to let
-a native WebGPU binding load.
-
-The renderer, libass bindings, font handling and colour conversion are the ones the browser build uses -
-only the render target differs. Rendering `box.ass` at 960x540 gives byte-for-byte the same lit-pixel count
-and mean alpha as Chrome does with the same options.
-
-The GPU path holds a frame's bitmaps in a storage buffer - about 16MB on a dense 1080p frame, against
-~90.5MB for the array-texture design it replaced. That design was kept for a while because it measured
-faster here, but with the pipelined readback in place it is 8-10% slower on every run, so it was dominated
-on both axes and has been removed.
-
-libass runs multi-threaded here too - Deno loads the same `ENVIRONMENT=node` build Node and Bun use. Its own
-web Workers are real and spec-compliant, but the browser build's pthread path traps with "memory access out
-of bounds" on the first render under Deno, at any thread count. Threads default to `hardwareConcurrency - 2`
-capped at 8; pass `threads: 1` to disable.
-
-Two things to know:
-
-- **One instance per process.** A second `create()` in the same process fails inside emscripten's pthread
-  setup. Render what you need from one instance, or use a process per job.
-- **Fonts are preloaded, not lazy.** libass resolves fonts on first use, so an on-demand fetch would make the
-  first frame come back empty and only the next one draw. There is no next frame here, so `create()` loads
-  them up front and the first `renderFrame` is correct.
-
-Bun is not supported: it has no WebGPU, WebGL or OffscreenCanvas, so there is nothing to composite with.
-
-# Node and Bun
-
-Neither runtime has WebGPU, WebGL or OffscreenCanvas, so there is nothing to composite with on the GPU.
-`jassub/node` composites libass' bitmaps on the CPU instead, and works in both:
-
-```js
-import JASSUB from 'jassub/node'
-
-const subs = await JASSUB.create({ subUrl: './sub.ass', width: 1920, height: 1080 })
-const rgba = await subs.renderFrame(12.5)   // premultiplied RGBA, width * height * 4
-await subs.destroy()
-```
-
-The blending maths mirrors the WebGPU fragment shader, so the output is comparable rather than merely
-similar: `box.ass` at 960x540 gives 714 lit pixels and mean alpha 238.26 in Chrome, Deno, Node and Bun alike.
-
-Renderer choice is by capability, not by runtime name. Neither ships WebGPU today, so `create()` picks CPU
-compositing - but a native binding that installs a spec-shaped `navigator.gpu` is used automatically. Pass
-`renderer: 'cpu'` to pin it.
-
-Neither ships WebGPU, so compositing happens on the CPU by default. Installing a native binding moves it to
-the GPU and nothing else has to change - renderer selection is by capability, not by runtime name:
-
-```shell
-npm i webgpu        # Node, wraps Dawn
-bun  add bun-webgpu # Bun
-```
-
-A dense 1080p frame, 30 frames through `renderFrames`:
-
-| | ms/frame |
-| --- | --- |
-| CPU compositing | 21.7 |
-| with a binding, pipelined | **6.3** |
-
-`renderFrames` overlaps each frame's readback with the next frame's work, which is where most of that comes
-from. `renderFrame` on its own gets about 8ms. Pass `renderer: 'cpu'` to pin CPU compositing regardless.
-
-Both run libass multi-threaded, which is the single largest win available here:
-
-| threads | libass |
-| --- | --- |
-| 1 | 15.1 ms |
-| 2 | 8.2 ms |
-| 4 | 4.3 ms |
-| 8 | 3.3 ms |
-
-That needs a build linked with `ENVIRONMENT=node`, because that is the one where emscripten emits its
-`worker_threads` pthread support and runs the thread handshake itself. `jassub/node` loads that build
-automatically. The browser build only knows how to spawn web Workers, and neither runtime provides one an
-emscripten pthread can start in - shimming it from the outside was tried at length and never worked.
-
-Thread count defaults to `hardwareConcurrency - 2`, capped at 8. Pass `threads: 1` to turn it off.
-
-Bun gets its own wasm build. It has no relaxed SIMD, so it cannot load the modern binary at all, and before
-this it fell back to the scalar one and spent 60.9 ms per frame in libass against Node's 18.0 ms. On the
-fixed-width SIMD build it is 18.5 ms - the same work, at the same speed.
-
-# How to build?
-
-## Get the Source
-
-Run git clone --recursive https://github.com/ThaUnknown/jassub.git
-
-### In a container
-
-1. Install a container runtime (see below)
-2. `./run-docker-build.sh` or `./run-docker-build.ps1`
-
-The shell script honours `CONTAINER_ENGINE` (default `docker`) and `CONTAINER_RUN_ARGS`, so any runtime with a
-docker-compatible `build`/`run` CLI can drive the same image.
-
-**Linux** — Docker or Podman natively.
-
-**macOS 26+** — Apple's [`container`](https://github.com/apple/container) is a native alternative to Docker
-Desktop:
-
-```shell
-brew install container && container system start
-CONTAINER_ENGINE=container ./run-docker-build.sh
-```
-
-If DNS fails inside the container, your host resolver is probably on loopback (Cloudflare WARP sets
-`127.0.2.2`), which the guest cannot reach. Point it at a reachable resolver:
-
-```shell
-CONTAINER_ENGINE=container CONTAINER_RUN_ARGS="--dns 1.1.1.1" ./run-docker-build.sh
-```
-
-**Windows** — there is no native Linux-container runtime. Docker Desktop, Podman Desktop and Rancher Desktop
-all run the containers inside WSL2, and Windows containers can only run Windows images, so this Linux image
-cannot run on them. The genuinely container-free path is to skip the container and build directly in WSL2:
-
-```shell
-wsl --install -d Ubuntu          # once, from PowerShell
-```
-
-then build inside WSL2 without any container — see *Without a container* below. `./run-docker-build.ps1`
-still works if you would rather keep Docker Desktop.
-
-### Without a container
-
-Clone with `--recursive`: freetype has a nested submodule of its own (`subprojects/dlg`), and without it the
-build stops at `check_out_submodule` trying to fetch it from inside the container, where the git metadata is
-not reachable. `git submodule update --init --recursive` fixes an existing clone.
-
-Three wasm variants are built, and the loader picks between them by feature test:
-
-| target | flags | used by |
-| --- | --- | --- |
-| `make` | none | anything without SIMD |
-| `SIMD=1 make` | `-msimd128` and the SSE lowerings | Bun, and any engine lacking relaxed SIMD |
-| `MODERN=1 make` | the above plus `-mrelaxed-simd`, AVX, FMA | Chrome, Node, Deno |
-
-The middle one exists because relaxed SIMD is not universal: JavaScriptCore rejects the modern binary
-outright, and dropping straight to the scalar build costs about 3.3x on libass. `-mavx/-mavx2/-mfma` are
-left out of it deliberately - emscripten implements those with relaxed instructions, which would put back
-the very opcodes the variant exists to avoid.
-
-The container exists only to pin the toolchain; the build itself is a plain `make`. On any Linux (including
-WSL2) you need [emsdk](https://emscripten.org/docs/getting_started/downloads.html) 6.0.4 on `PATH` plus the
-packages the [`Dockerfile`](Dockerfile) installs:
-
-```shell
-sudo apt-get install -y build-essential cmake dos2unix git ragel patch libtool itstool \
-    pkg-config python3 gettext autopoint automake autoconf m4 gperf licensecheck
-npm install
-make && MODERN=1 make
-```
-
-Both `make` invocations are needed: the first builds the baseline worker, the second the modern (SIMD) one.
+The wasm binaries are committed, so building is only needed to change libass or the C++ bindings. See
+[docs/building.md](docs/building.md).
