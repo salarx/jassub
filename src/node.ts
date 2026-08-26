@@ -12,7 +12,7 @@
 //
 // The shims have to be installed before the worker module is imported, because the failures they prevent
 // happen at module-evaluation time. Hence the dynamic import below rather than a static one.
-import { defaultThreads, installOptionalWebGPU, installRuntimeShims, pickLoaderName, pickWasmName, toFetchable } from './runtime.ts'
+import { defaultThreads, installOptionalWebGPU, installRuntimeShims, NODE_LOADER, NODE_WASM, toFetchable } from './runtime.ts'
 
 import type { CPURenderer } from './worker/renderers/cpu-renderer.ts'
 import type { ASSRenderer } from './worker/worker.ts'
@@ -31,8 +31,6 @@ export interface JASSUBNodeOptions {
   /** Font family -> URL or bytes, used to satisfy fonts the track asks for by name. */
   availableFonts?: Record<string, Uint8Array | string>
   defaultFont?: string
-  /** Override the wasm binary location. Defaults to the one shipped next to this module. */
-  wasmUrl?: string
   libassMemoryLimit?: number
   libassGlyphLimit?: number
   debug?: boolean
@@ -82,20 +80,11 @@ export default class JASSUBNode {
 
     const subUrl = opts.subUrl == null ? undefined : await toFetchable(opts.subUrl)
 
-    // These runtimes are single-threaded here, so the non-SIMD build is not automatically the safe choice -
-    // pick the same way the browser does and let the probe decide.
-    const wasmUrl = await toFetchable(opts.wasmUrl ?? new URL(
-      `./wasm/${pickWasmName()}`,
-      import.meta.url
-    ).href)
-
-    // The Node build is a separate loader, not just a different wasm: it is linked with ENVIRONMENT=node,
-    // which is where emscripten emits its worker_threads pthread support.
-    const loader = pickLoaderName()
-    const wasmFactory = loader === 'jassub-worker.js'
-      ? undefined
-      : (await import(new URL(`./wasm/${loader}`, import.meta.url).href)).default
-
+    // The loader is a separate build, not just a different wasm: it is linked with ENVIRONMENT=node,
+    // which is where emscripten emits its worker_threads pthread support. It reads its own binary from
+    // beside itself, so there is no wasm to select and nothing useful for a caller to override.
+    const wasmUrl = new URL(`./wasm/${NODE_WASM}`, import.meta.url).href
+    const wasmFactory = (await import(new URL(`./wasm/${NODE_LOADER}`, import.meta.url).href)).default
     const threads = opts.threads ?? defaultThreads()
 
     // Preload the fonts rather than letting libass pull them on demand. On demand means the first render

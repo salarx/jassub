@@ -31,7 +31,7 @@ export function installRuntimeShims () {
   installFetchFileSupport(g)
 
   // Threads are not enabled here. The Node build carries emscripten's own worker_threads pthread
-  // support, which does the handshake itself - see pickLoaderName and JASSUBNode's `threads` option.
+  // support, which does the handshake itself - see NODE_LOADER and JASSUBNode's `threads` option.
 }
 
 /**
@@ -83,30 +83,13 @@ export async function toFetchable (url: string): Promise<string> {
   return url
 }
 
-/**
- * Which wasm binary this runtime can actually run.
- *
- * Three-way rather than two, because relaxed SIMD is not universal. Bun's JavaScriptCore refuses the modern
- * binary outright - "relaxed simd instructions not supported" - and dropping straight to the scalar build
- * costs roughly 3x on libass. Fixed-width simd128 is supported everywhere current, so it is the middle rung.
- */
-export function pickWasmName (): string {
-  if (validates(RELAXED_SIMD)) return 'jassub-worker-modern.wasm'
-  if (validates(SIMD128)) return 'jassub-worker-simd.wasm'
-  return 'jassub-worker.wasm'
-}
+export const NODE_LOADER = 'jassub-worker-node.mjs'
 
 /**
- * The loader module to import, which is not always the one sitting next to the wasm.
- *
- * Node and Bun get a build linked with ENVIRONMENT=node, because that is the one where emscripten emits its
- * worker_threads pthread support and does the thread handshake itself. The browser build only knows how to
- * spawn web Workers, and neither runtime provides one an emscripten pthread can actually start in. Worth
- * 4.6x on libass.
+ * The binary that loader reads, named here only so callers can report it. The loader resolves it from
+ * beside itself and ignores any URL passed in - which is why there is no wasm selection to make.
  */
-export function pickLoaderName (): string {
-  return prefersNodeBuild() ? 'jassub-worker-node.mjs' : 'jassub-worker.js'
-}
+export const NODE_WASM = 'jassub-worker-node.wasm'
 
 /** Threads to ask libass for: leave a couple of cores, and do not run away on a big machine. */
 export function defaultThreads (): number {
@@ -114,29 +97,6 @@ export function defaultThreads (): number {
   const cores = globalThis.navigator?.hardwareConcurrency ?? 4
   return Math.min(Math.max(1, cores - 2), 8)
 }
-
-const validates = (bytes: Uint8Array) => {
-  try { return WebAssembly.validate(bytes as unknown as BufferSource) } catch { return false }
-}
-
-// v128.const, v128.const, i8x16.relaxed_swizzle
-const RELAXED_SIMD = Uint8Array.of(
-  0x00, 0x61, 0x73, 0x6d, 0x01, 0x00, 0x00, 0x00,
-  0x01, 0x05, 0x01, 0x60, 0x00, 0x01, 0x7b,
-  0x03, 0x02, 0x01, 0x00,
-  0x0a, 0x2b, 0x01, 0x29, 0x00,
-  0xfd, 0x0c, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
-  0xfd, 0x0c, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
-  0xfd, 0x80, 0x02,
-  0x0b)
-
-// i32.const 0; i8x16.splat; drop
-const SIMD128 = Uint8Array.of(
-  0x00, 0x61, 0x73, 0x6d, 0x01, 0x00, 0x00, 0x00,
-  0x01, 0x04, 0x01, 0x60, 0x00, 0x00,
-  0x03, 0x02, 0x01, 0x00,
-  0x0a, 0x09, 0x01, 0x07, 0x00,
-  0x41, 0x00, 0xfd, 0x0f, 0x1a, 0x0b)
 
 /**
  * Use a native WebGPU binding if one is installed, so GPU compositing costs the caller an install rather

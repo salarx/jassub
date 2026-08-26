@@ -14,7 +14,7 @@
 // produced in Chrome, which is the point: it can be compared against one.
 import { finalizer } from 'abslink'
 
-import { defaultThreads, installRuntimeShims, pickLoaderName, pickWasmName, toFetchable } from './runtime.ts'
+import { defaultThreads, installRuntimeShims, NODE_LOADER, NODE_WASM, toFetchable } from './runtime.ts'
 import { ASSRenderer } from './worker/worker.ts'
 
 import type { WebGPUBufferHeadlessRenderer } from './worker/renderers/webgpu-buffer-headless-renderer.ts'
@@ -33,8 +33,6 @@ export interface JASSUBDenoOptions {
   /** Font family -> URL or bytes, used to satisfy fonts the track asks for by name. */
   availableFonts?: Record<string, Uint8Array | string>
   defaultFont?: string
-  /** Override the wasm binary location. Defaults to the one shipped next to this module. */
-  wasmUrl?: string
   libassMemoryLimit?: number
   libassGlyphLimit?: number
   debug?: boolean
@@ -78,18 +76,11 @@ export default class JASSUBDeno {
       opts = { ...opts, subUrl: await toFetchable(opts.subUrl) }
     }
 
-    // SIMD is selected the same way the browser build selects it, so the wasm under test is the same one.
-    const wasmUrl = await toFetchable(opts.wasmUrl ?? new URL(
-      `./wasm/${pickWasmName()}`,
-      import.meta.url
-    ).href)
-
-    // The node build is what carries emscripten's worker_threads pthread support. Deno has real web
-    // Workers, but the browser build's pthread path traps on the first render there.
-    const loader = pickLoaderName()
-    const wasmFactory = loader === 'jassub-worker.js'
-      ? undefined
-      : (await import(new URL(`./wasm/${loader}`, import.meta.url).href)).default
+    // The loader is a separate build, not just a different wasm: it is linked with ENVIRONMENT=node,
+    // which is where emscripten emits its worker_threads pthread support. It reads its own binary from
+    // beside itself, so there is no wasm to select and nothing useful for a caller to override.
+    const wasmUrl = new URL(`./wasm/${NODE_WASM}`, import.meta.url).href
+    const wasmFactory = (await import(new URL(`./wasm/${NODE_LOADER}`, import.meta.url).href)).default
     const threads = opts.threads ?? defaultThreads()
 
     // Fonts travel the same path as the wasm and hit the same file: limitation.
