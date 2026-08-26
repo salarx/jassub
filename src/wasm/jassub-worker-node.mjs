@@ -30,6 +30,25 @@ globalThis.self ??= globalThis
 // startsWith check then simply does not match, rather than throwing on undefined.
 if (typeof globalThis.name !== 'string') globalThis.name = ''
 
+// Bun defines a web-style `postMessage` inside worker_threads workers, so emscripten's
+// `if (!globalThis.postMessage)` guard skips installing its own parentPort -> globalThis.onmessage bridge.
+// Bun <= 1.3 got away with that because it also routed worker_threads messages to globalThis.onmessage.
+// Bun 1.4 stopped, so with the bridge skipped the parent's {cmd:1} never reaches the worker: the pthread
+// pool never reports ready and create() hangs forever, with no error of any kind.
+//
+// Bridging unconditionally is not an option - on Bun 1.3 both paths then fire, the thread entry runs
+// twice and the module dies with a bare "unwind" - so it goes in only where the native routing is gone.
+if (globalThis.Bun) {
+  const [major, minor] = Bun.version.split('.').map(Number)
+  if (major > 1 || (major === 1 && minor >= 4)) {
+    const wt = await import('node:worker_threads')
+    if (!wt.isMainThread && wt.workerData === 'em-pthread') {
+      wt.parentPort.on('message', data => globalThis.onmessage?.({ data }))
+      globalThis.postMessage = msg => wt.parentPort.postMessage(msg)
+    }
+  }
+}
+
 // emscripten doesnt support conditional loading of wasm modules out of the box
 // so we hack around it by passing the url and simd support via the worker name
 // hopefully not bad?
