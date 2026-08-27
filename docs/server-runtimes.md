@@ -31,6 +31,27 @@ The GPU path holds a frame's bitmaps in a storage buffer - about 16MB on a dense
 faster here, but with the pipelined readback in place it is 8-10% slower on every run, so it was dominated
 on both axes and has been removed.
 
+**`auto` does not assume the GPU is faster - it measures.** Compositing there genuinely is: 2.2ms against
+the CPU compositor's 5.8 on a dense 1080p frame. But the result then has to be read back, and that cost
+belongs to the hardware rather than the content - a couple of milliseconds on unified memory, 15-30 on a
+discrete card over PCIe, where no amount of pipelining hides it. Measured on a Radeon RX 7900 GRE, CPU
+compositing won at every size in both drive modes:
+
+| size | `renderFrame` | `renderFrames` |
+| --- | --- | --- |
+| 640x360 | CPU by 78% | CPU by 27% |
+| 960x540 | CPU by 76% | CPU by 28% |
+| 1920x1080 | CPU by 59% | CPU by 6% |
+| 3840x2160 | CPU by 38% | CPU by 1% |
+
+On an M3 the GPU path wins instead, so a fixed default is wrong on one machine or the other. `create()`
+therefore times one empty readback - before any frame exists, so it costs nothing you would not pay anyway -
+and takes the GPU only if it comes in under `gpuReadbackBudgetMs`, which defaults to 4. Raise that to pin
+the GPU, or pass `renderer: 'cpu'` to pin the compositor. The choice is logged under `debug`.
+
+Note how flat the GPU column is with resolution: the readback is bound by synchronisation, not bandwidth,
+which is why a bigger frame narrows the gap rather than widening it.
+
 libass runs multi-threaded here too - Deno loads the same `ENVIRONMENT=node` build Node and Bun use. Its own
 web Workers are real and spec-compliant, but the browser build's pthread path traps with "memory access out
 of bounds" on the first render under Deno, at any thread count. Threads default to `hardwareConcurrency - 2`

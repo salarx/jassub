@@ -41,6 +41,13 @@ export interface JASSUBNodeOptions {
    */
   renderer?: 'auto' | 'cpu'
   /**
+   * Readback cost, in ms, above which 'auto' composites on the CPU instead of the GPU. Default 4.
+   *
+   * Only consulted for 'auto'. Raise it to keep the GPU path on a machine whose readback is slow but whose
+   * CPU is slower still; set it to Infinity to pin the GPU the way 'cpu' pins the compositor.
+   */
+  gpuReadbackBudgetMs?: number
+  /**
    * libass worker threads. Defaults to hardwareConcurrency - 2, capped at 8.
    *
    * These are real threads, through emscripten's worker_threads support, and they are the single largest
@@ -115,6 +122,7 @@ export default class JASSUBNode {
       queryFonts: false,
       // capability-based rather than runtime-based: ask for CPU only when there is no GPU to ask for
       renderer: opts.renderer === 'cpu' || !navigator.gpu ? 'cpu' : 'auto',
+      gpuReadbackBudgetMs: opts.gpuReadbackBudgetMs,
       packed: true,
       wasmFactory,
       threads

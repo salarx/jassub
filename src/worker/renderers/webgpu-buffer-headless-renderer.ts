@@ -14,14 +14,40 @@ import { WebGPUBufferRenderer } from './webgpu-buffer-renderer.ts'
 // and the padding is stripped after mapping.
 const ROW_ALIGN = 256
 const alignRow = (bytes: number) => Math.ceil(bytes / ROW_ALIGN) * ROW_ALIGN
-const SLOTS = 2
+// Target slots, which is also how many frames renderFrames keeps in flight. Two is the minimum that
+// overlaps anything; three measured best on a discrete GPU (dense 1080p 16.9ms -> 14.4, 540p 16.3 -> 11.8).
+// Beyond three buys nothing and costs memory: at 4K a slot is 33MB of texture plus its readback buffer, and
+// four of them measured slower than two.
+const SLOTS = 3
 
 export class WebGPUBufferHeadlessRenderer extends WebGPUBufferRenderer {
-  targets: Array<GPUTexture | null> = [null, null]
-  _readBuffers: Array<GPUBuffer | null> = [null, null]
-  _readBufferSizes = [0, 0]
+  static SLOTS = SLOTS
+
+  /**
+   * How long one readback round-trip costs here, in milliseconds.
+   *
+   * This one number decides whether the GPU path is worth taking. Compositing on the GPU really is faster -
+   * 2.2ms against 5.8 on a dense 1080p frame - but the result then has to come back across the bus, and
+   * that cost is set by the hardware rather than the content: a couple of ms on unified memory, 15-30 on a
+   * discrete card over PCIe, where no amount of pipelining hides it and the CPU compositor wins at every
+   * size and both drive modes. Measured on an empty target, since the copy costs the same whatever was
+   * drawn, which is what makes it usable before the first frame exists.
+   */
+  async probeReadback (samples = 3): Promise<number> {
+    const ms: number[] = []
+    for (let i = 0; i < samples; i++) {
+      const t = performance.now()
+      await this.beginRead()
+      ms.push(performance.now() - t)
+    }
+    ms.sort((a, b) => a - b)
+    return ms[ms.length >> 1] ?? Infinity
+  }
+  targets: Array<GPUTexture | null> = Array(SLOTS).fill(null)
+  _readBuffers: Array<GPUBuffer | null> = Array(SLOTS).fill(null)
+  _readBufferSizes: number[] = Array(SLOTS).fill(0)
   // reused across frames, one per slot - see beginRead
-  _outBuffers: Array<Uint8Array | null> = [null, null]
+  _outBuffers: Array<Uint8Array | null> = Array(SLOTS).fill(null)
   // which slot the next render draws into
   _slot = 0
 

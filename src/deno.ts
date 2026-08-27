@@ -37,10 +37,18 @@ export interface JASSUBDenoOptions {
   libassGlyphLimit?: number
   debug?: boolean
   /**
-   * 'auto' (default) renders on the GPU through a storage buffer, which holds a dense frame's bitmaps in
-   * ~16MB. 'cpu' pins CPU compositing.
+   * 'auto' (default) measures what a GPU readback costs here and takes the GPU path only if it is cheap
+   * enough to pay for itself - see gpuReadbackBudgetMs. On unified memory that is the GPU; on a discrete
+   * card over PCIe the readback dominates and CPU compositing wins at every size. 'cpu' pins the CPU.
    */
   renderer?: 'auto' | 'cpu'
+  /**
+   * Readback cost, in ms, above which 'auto' composites on the CPU instead of the GPU. Default 4.
+   *
+   * Only consulted for 'auto'. Raise it to keep the GPU path on a machine whose readback is slow but whose
+   * CPU is slower still; set it to Infinity to pin the GPU the way 'cpu' pins the compositor.
+   */
+  gpuReadbackBudgetMs?: number
   /**
    * libass worker threads. Defaults to hardwareConcurrency - 2, capped at 8.
    *
@@ -116,6 +124,7 @@ export default class JASSUBDeno {
       // there are no local fonts to query outside a browser
       queryFonts: false,
       renderer: opts.renderer === 'cpu' || !navigator.gpu ? 'cpu' : (opts.renderer ?? 'auto'),
+      gpuReadbackBudgetMs: opts.gpuReadbackBudgetMs,
       packed: true,
       wasmFactory,
       threads
@@ -156,14 +165,16 @@ export default class JASSUBDeno {
       for (const t of times) yield await this.renderFrame(t)
       return
     }
-    let pending: Promise<Uint8Array> | null = null
+    // depth of frames kept in flight. One slot must stay free for the draw that has not been read yet.
+    // one frame in flight per slot: the oldest is awaited before the draw that reuses its slot
+    const depth = Math.max(2, (gpu.constructor as unknown as { SLOTS?: number }).SLOTS ?? 2)
+    const q: Array<Promise<Uint8Array>> = []
     for (const t of times) {
       this._renderer._draw(t, true)
-      const next = gpu.beginRead()
-      if (pending) yield await pending
-      pending = next
+      q.push(gpu.beginRead())
+      if (q.length >= depth) yield await q.shift()!
     }
-    if (pending) yield await pending
+    while (q.length) yield await q.shift()!
   }
 
   /** Change the render resolution. */

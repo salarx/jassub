@@ -41,10 +41,18 @@ interface opts {
   wasmFactory?: (arg: Record<string, unknown>) => Promise<MainModule>
   /** libass worker threads. Defaults to THREAD_COUNT, which is 1 outside a cross-origin-isolated page. */
   threads?: number
+  /** Readback cost above which 'auto' composites on the CPU instead. See READBACK_BUDGET_MS. */
+  gpuReadbackBudgetMs?: number
   packed?: boolean
 }
 
 const constructor = Symbol.for('constructor')
+// Where the GPU stops paying for itself. Compositing there saves roughly 3.6ms on a dense 1080p frame
+// (2.2ms against the CPU compositor's 5.8), so a readback dearer than that is a net loss however well it
+// pipelines. 4ms leaves a little room: the two machines measured sit at ~2ms (M3, unified memory) and
+// 15-30ms (discrete over PCIe), far enough either side that the exact figure is not load-bearing.
+const READBACK_BUDGET_MS = 4
+
 const EMPTY_META = new Int32Array(0)
 
 export class ASSRenderer {
@@ -89,9 +97,35 @@ export class ASSRenderer {
         // under Deno's wgpu, which is what justified carrying two designs at all. Re-measured with the
         // pipelined readback in place it is 8-10% *slower* on every run, so it was dominated on both axes
         // and is gone.
+        //
+        // 'auto' has to earn it, though. Compositing on the GPU is faster everywhere, but the frame then
+        // has to be read back, and that cost is the hardware's rather than the content's: a couple of ms
+        // on unified memory, 15-30 on a discrete card over PCIe. Measured on a Radeon RX 7900 GRE the CPU
+        // compositor won at every size in both drive modes - by 59% at 1080p through renderFrame and by 6%
+        // through renderFrames - while on an M3 the GPU path wins. A fixed default is wrong on one of them,
+        // so ask the machine instead: one empty readback, before any frame exists, costs about as much as
+        // it will save. Asking for the renderer by name skips the probe.
         const headless = new WebGPUBufferHeadlessRenderer()
-        await headless.init(data.width, data.height)
-        this._gpurender = headless
+        let usingGpu = false
+        try {
+          await headless.init(data.width, data.height)
+          const budget = data.gpuReadbackBudgetMs ?? READBACK_BUDGET_MS
+          const cost = (data.renderer ?? 'auto') === 'auto' ? await headless.probeReadback() : 0
+          usingGpu = cost <= budget
+          if (!usingGpu) {
+            this._log(`JASSUB: readback costs ${cost.toFixed(1)}ms here, over the ${budget}ms budget - compositing on the CPU instead`)
+            headless.destroy()
+          }
+        } catch (e) {
+          this._log('JASSUB: WebGPU setup failed, compositing on the CPU instead: ' + (e as Error).message)
+        }
+        if (usingGpu) {
+          this._gpurender = headless
+        } else {
+          const cpu = new CPURenderer()
+          cpu.init(data.width, data.height)
+          this._gpurender = cpu
+        }
       } else {
         const cpu = new CPURenderer()
         cpu.init(data.width, data.height)
