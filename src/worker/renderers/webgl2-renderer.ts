@@ -95,7 +95,15 @@ void main() {
 }
 `
 
-// Texture array configuration
+// Texture array configuration.
+//
+// This wastes memory and there is no cheap way around it: every layer is allocated at the size of the
+// largest bitmap in the frame, so one near-fullscreen sign among a hundred glyphs costs 90.5MB to hold
+// 12.3MB of coverage. Stacking the bitmaps into the rows of a single 2D texture instead was tried and
+// reverted - it needs 24017 rows for a dense 1080p frame against a MAX_TEXTURE_SIZE of 16384, so it fails
+// outright on exactly the content that motivates it, and it was no faster. Packing them 2D would work but
+// is the atlas approach, which measured 72% slower. The storage-buffer WebGPU renderer is the way out of
+// this, and it is the default where WebGPU exists.
 const TEX_ARRAY_SIZE = 64 // Fixed layer count
 const TEX_INITIAL_SIZE = 256 // Initial width/height
 const MAX_INSTANCES = 256 // Maximum instances per draw call

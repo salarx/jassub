@@ -1,17 +1,41 @@
 {
-  "name": "jassub",
-  "version": "2.5.14",
+  "name": "@salarx/jassub",
+  "version": "2.6.0",
   "description": "The Fastest JavaScript SSA/ASS Subtitle Renderer For Browsers",
   "main": "dist/jassub.js",
+  "exports": {
+    ".": {
+      "types": "./dist/jassub.d.ts",
+      "default": "./dist/jassub.js"
+    },
+    "./node": {
+      "types": "./dist/node.d.ts",
+      "default": "./dist/node.js"
+    },
+    "./deno": {
+      "types": "./dist/deno.d.ts",
+      "default": "./dist/deno.js"
+    },
+    "./dist/*": "./dist/*",
+    "./package.json": "./package.json"
+  },
   "type": "module",
+  "engines": {
+    "node": ">=22"
+  },
   "files": [
     "dist/wasm/*",
     "dist/worker/*",
     "dist/jassub.*",
     "dist/debug.*",
+    "dist/deno.*",
+    "dist/runtime.*",
+    "dist/node.*",
     "dist/default.woff2",
     "!dist/wasm/jassub-worker-modern.js",
+    "!dist/wasm/jassub-worker-simd.js",
     "README.md",
+    "docs/*.md",
     "LICENSE",
     "index.d.ts",
     "src/**/*.ts",
@@ -21,11 +45,12 @@
     "build": "tsc --noCheck",
     "dev": "vite --host",
     "docker:build": "docker build -t thaunknown/jassub-build .",
-    "docker:run": "docker run -it --rm -v ${PWD}:/code --name thaunknown_jassub-build thaunknown/jassub-build:latest"
+    "docker:run": "docker run -it --rm -v ${PWD}:/code --name thaunknown_jassub-build thaunknown/jassub-build:latest",
+    "prepack": "npm run build && cp src/wasm/jassub-worker.wasm src/wasm/jassub-worker-modern.wasm src/wasm/jassub-worker-simd.wasm src/wasm/jassub-worker-node.wasm src/wasm/jassub-worker-node.mjs dist/wasm/ && cp src/default.woff2 dist/default.woff2"
   },
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/ThaUnknown/jassub.git"
+    "url": "git+https://github.com/salarx/jassub.git"
   },
   "keywords": [
     "libass",
@@ -42,9 +67,9 @@
   "author": "ThaUnknown",
   "license": "LGPL-2.1-or-later AND (FTL OR GPL-2.0-or-later) AND MIT AND MIT-Modern-Variant AND ISC AND NTP AND Zlib AND BSL-1.0",
   "bugs": {
-    "url": "https://github.com/ThaUnknown/jassub/issues"
+    "url": "https://github.com/salarx/jassub/issues"
   },
-  "homepage": "https://github.com/ThaUnknown/jassub",
+  "homepage": "https://github.com/salarx/jassub",
   "dependencies": {
     "abslink": "^1.2.2",
     "lfa-ponyfill": "^1.1.0",
@@ -56,5 +81,8 @@
     "eslint-config-standard-universal": "^1.0.9",
     "typescript": "^5.2.2",
     "vite": "^7.3.1"
+  },
+  "publishConfig": {
+    "access": "public"
   }
 }

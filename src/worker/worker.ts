@@ -5,14 +5,14 @@ import { queryRemoteFonts } from 'lfa-ponyfill'
 import WASM from '../wasm/jassub-worker.js'
 
 import { Canvas2DRenderer } from './renderers/2d-renderer.ts'
+import { CPURenderer } from './renderers/cpu-renderer.ts'
 import { WebGL1Renderer } from './renderers/webgl1-renderer.ts'
-import { WebGL2AtlasRenderer } from './renderers/webgl2-atlas-renderer.ts'
 import { WebGL2Renderer } from './renderers/webgl2-renderer.ts'
-import { WebGPUBatchedRenderer } from './renderers/webgpu-batched-renderer.ts'
+import { WebGPUBufferHeadlessRenderer } from './renderers/webgpu-buffer-headless-renderer.ts'
+import { WebGPUBufferRenderer } from './renderers/webgpu-buffer-renderer.ts'
 import { _fetch, fetchtext, LIBASS_YCBCR_MAP, THREAD_COUNT, WEIGHT_MAP, type ASSEvent, type ASSImage, type ASSStyle, type WeightValue } from './util.ts'
 
 import type { JASSUB, MainModule } from '../wasm/types.d.ts'
-// import { WebGPURenderer } from './webgpu-renderer'
 
 declare const self: DedicatedWorkerGlobalScope &
   typeof globalThis & {
@@ -33,11 +33,26 @@ interface opts {
   libassMemoryLimit: number
   libassGlyphLimit: number
   queryFonts: 'local' | 'localandremote' | false
-  renderer?: 'auto' | 'webgl2' | 'webgl2-atlas' | 'webgpu' | 'webgl1' | 'canvas2d'
+  renderer?: 'auto' | 'webgl2' | 'webgl1' | 'canvas2d' | 'webgpu-buffer' | 'cpu'
+  /**
+   * Loader to use instead of the bundled one. The browser import stays static so bundlers can see it; Node
+   * passes the ENVIRONMENT=node build here, which is the one with worker_threads pthread support.
+   */
+  wasmFactory?: (arg: Record<string, unknown>) => Promise<MainModule>
+  /** libass worker threads. Defaults to THREAD_COUNT, which is 1 outside a cross-origin-isolated page. */
+  threads?: number
+  /** Readback cost above which 'auto' composites on the CPU instead. See READBACK_BUDGET_MS. */
+  gpuReadbackBudgetMs?: number
   packed?: boolean
 }
 
 const constructor = Symbol.for('constructor')
+// Where the GPU stops paying for itself. Compositing there saves roughly 3.6ms on a dense 1080p frame
+// (2.2ms against the CPU compositor's 5.8), so a readback dearer than that is a net loss however well it
+// pipelines. 4ms leaves a little room: the two machines measured sit at ~2ms (M3, unified memory) and
+// 15-30ms (discrete over PCIe), far enough either side that the exact figure is not load-bearing.
+const READBACK_BUDGET_MS = 4
+
 const EMPTY_META = new Int32Array(0)
 
 export class ASSRenderer {
@@ -45,16 +60,16 @@ export class ASSRenderer {
   _subtitleColorSpace?: 'BT601' | 'BT709' | 'SMPTE240M' | 'FCC' | null
   _videoColorSpace?: 'BT709' | 'BT601'
   _malloc!: (size: number) => number
-  _gpurender!: WebGL2Renderer | WebGL2AtlasRenderer | WebGPUBatchedRenderer | WebGL1Renderer | Canvas2DRenderer
+  _gpurender!: WebGL2Renderer | WebGPUBufferRenderer | WebGPUBufferHeadlessRenderer | CPURenderer | WebGL1Renderer | Canvas2DRenderer
 
   debug = false
   _packed = true
 
-  constructor (...args: [data: opts, getFont: (font: string, weight: WeightValue) => Promise<Uint8Array<ArrayBuffer> | undefined>, ctrl: OffscreenCanvas]) {
+  constructor (...args: [data: opts, getFont: (font: string, weight: WeightValue) => Promise<Uint8Array<ArrayBuffer> | undefined>, ctrl?: OffscreenCanvas]) {
     return this[constructor](...args).catch(console.error) as unknown as this
   }
 
-  async [constructor] (data: opts, getFont: (font: string, weight: WeightValue) => Promise<Uint8Array<ArrayBuffer> | undefined>, ctrl: OffscreenCanvas) {
+  async [constructor] (data: opts, getFont: (font: string, weight: WeightValue) => Promise<Uint8Array<ArrayBuffer> | undefined>, ctrl?: OffscreenCanvas) {
     // remove case sensitivity
     this._availableFonts = Object.fromEntries(Object.entries(data.availableFonts).map(([k, v]) => [k.trim().toLowerCase(), v]))
     this._packed = data.packed !== false
@@ -70,25 +85,96 @@ export class ASSRenderer {
     // const devicePromise = navigator.gpu?.requestAdapter({
     //   powerPreference: 'high-performance'
     // }).then(adapter => adapter?.requestDevice())
-    try {
-      const testCanvas = new OffscreenCanvas(1, 1)
-      const forced = data.renderer && data.renderer !== 'auto' ? data.renderer : null
-      if (forced === 'webgpu') {
-        this._gpurender = new WebGPUBatchedRenderer()
-      } else if (forced === 'canvas2d') {
-        this._gpurender = new Canvas2DRenderer()
-      } else if (forced === 'webgl1') {
-        this._gpurender = new WebGL1Renderer()
-      } else if (testCanvas.getContext('webgl2')) {
-        this._gpurender = forced === 'webgl2-atlas' ? new WebGL2AtlasRenderer() : new WebGL2Renderer()
+    // No canvas: a runtime with WebGPU but no canvas at all, which is Deno. Render into a texture and let
+    // the caller read it back. Awaited rather than fire-and-forget so the renderer is ready before the
+    // first draw, since there is no swapchain to absorb an early frame.
+    if (!ctrl) {
+      // WebGPU where it exists (Deno), CPU compositing where it does not (Node, Bun). Both produce the
+      // same premultiplied RGBA for the same frame; only where the blending happens differs.
+      if (navigator.gpu && data.renderer !== 'cpu') {
+        // Storage buffer, and now the only GPU option: ~16MB against the ~90.5MB the array-texture renderer
+        // needed for the same dense frame. That renderer was kept for a while because it measured faster
+        // under Deno's wgpu, which is what justified carrying two designs at all. Re-measured with the
+        // pipelined readback in place it is 8-10% *slower* on every run, so it was dominated on both axes
+        // and is gone.
+        //
+        // 'auto' has to earn it, though. Compositing on the GPU is faster everywhere, but the frame then
+        // has to be read back, and that cost is the hardware's rather than the content's: a couple of ms
+        // on unified memory, 15-30 on a discrete card over PCIe. Measured on a Radeon RX 7900 GRE the CPU
+        // compositor won at every size in both drive modes - by 59% at 1080p through renderFrame and by 6%
+        // through renderFrames - while on an M3 the GPU path wins. A fixed default is wrong on one of them,
+        // so ask the machine instead: one empty readback, before any frame exists, costs about as much as
+        // it will save. Asking for the renderer by name skips the probe.
+        const headless = new WebGPUBufferHeadlessRenderer()
+        let usingGpu = false
+        try {
+          await headless.init(data.width, data.height)
+          const budget = data.gpuReadbackBudgetMs ?? READBACK_BUDGET_MS
+          const cost = (data.renderer ?? 'auto') === 'auto' ? await headless.probeReadback() : 0
+          usingGpu = cost <= budget
+          if (!usingGpu) {
+            this._log(`JASSUB: readback costs ${cost.toFixed(1)}ms here, over the ${budget}ms budget - compositing on the CPU instead`)
+            headless.destroy()
+          }
+        } catch (e) {
+          this._log('JASSUB: WebGPU setup failed, compositing on the CPU instead: ' + (e as Error).message)
+        }
+        if (usingGpu) {
+          this._gpurender = headless
+        } else {
+          const cpu = new CPURenderer()
+          cpu.init(data.width, data.height)
+          this._gpurender = cpu
+        }
       } else {
-        this._gpurender = testCanvas.getContext('webgl')?.getExtension('ANGLE_instanced_arrays') ? new WebGL1Renderer() : new Canvas2DRenderer()
+        const cpu = new CPURenderer()
+        cpu.init(data.width, data.height)
+        this._gpurender = cpu
       }
-    } catch {
-      this._gpurender = new Canvas2DRenderer()
-    }
+    } else {
+      // Default to the storage-buffer WebGPU renderer. It holds a frame's bitmaps in about 16MB where the
+      // array-texture designs need 90.5MB for the same content, and it is no slower.
+      //
+      // It differs from the other backends by exactly one pixel, in one channel, by 1/255, on one frame of
+      // the kusriya track - deterministically. That is rounding, not rendering: the shader converts the
+      // coverage byte with f32(b)/255 where a texture fetch has the hardware do it, and across 624
+      // overlapping blends one pixel lands a step apart. It is the same magnitude already accepted for
+      // WebGPU on AMD in BENCHMARKS.md.
+      //
+      // Chosen here rather than asked for by name, so it has to prove it works: a WebGPU device that fails
+      // to come up would otherwise leave a renderer attached that draws nothing, which is a worse failure
+      // than being slower. Anything that goes wrong falls through to the WebGL2 path below.
+      const forced = data.renderer && data.renderer !== 'auto' ? data.renderer : null
+      let chosen = false
+      if (!forced && await WebGPUBufferRenderer.isSupported()) {
+        const gpu = new WebGPUBufferRenderer()
+        if (await gpu.trySetCanvas(ctrl)) {
+          this._gpurender = gpu
+          chosen = true
+        }
+      }
 
-    this._gpurender.setCanvas(ctrl)
+      if (!chosen) {
+        try {
+          const testCanvas = new OffscreenCanvas(1, 1)
+          if (forced === 'webgpu-buffer') {
+            this._gpurender = new WebGPUBufferRenderer()
+          } else if (forced === 'canvas2d') {
+            this._gpurender = new Canvas2DRenderer()
+          } else if (forced === 'webgl1') {
+            this._gpurender = new WebGL1Renderer()
+          } else if (testCanvas.getContext('webgl2')) {
+            this._gpurender = new WebGL2Renderer()
+          } else {
+            this._gpurender = testCanvas.getContext('webgl')?.getExtension('ANGLE_instanced_arrays') ? new WebGL1Renderer() : new Canvas2DRenderer()
+          }
+        } catch {
+          this._gpurender = new Canvas2DRenderer()
+        }
+
+        this._gpurender.setCanvas(ctrl)
+      }
+    }
 
     // The track fetch, the WASM instantiation and the font downloads are all independent, but used to run
     // strictly in series, so time to first subtitle was their sum. Start the track download now and await it
@@ -99,13 +185,14 @@ export class ASSRenderer {
 
     this._loadedInitialFonts = !data.fonts.length
     // eslint-disable-next-line @typescript-eslint/unbound-method
-    const { _malloc, JASSUB } = await (WASM({ __url: data.wasmUrl, __out: (log: string) => this._log(log) }) as Promise<MainModule>)
+    const factory = data.wasmFactory ?? WASM
+    const { _malloc, JASSUB } = await (factory({ __url: data.wasmUrl, __out: (log: string) => this._log(log) }) as Promise<MainModule>)
     this._malloc = _malloc
 
     this._wasm = new JASSUB(data.width, data.height, this._defaultFont)
     // Firefox seems to have issues with multithreading in workers
     // a worker inside a worker does not recieve messages properly
-    this._wasm.setThreads(THREAD_COUNT)
+    this._wasm.setThreads(data.threads ?? THREAD_COUNT)
 
     if (!this._loadedInitialFonts) await this._loadInitialFonts(data.fonts)
 

@@ -10,6 +10,7 @@ test
 .pnpm-store
 dist/*
 src/wasm/jassub-worker-modern.js
+src/wasm/jassub-worker-simd.js
 .svelte-kit/
 
 package-lock.json

@@ -42,9 +42,18 @@ fi
 if [ "$FAST" -eq 0 ] ; then
     "$ENGINE" build -t "$IMAGE" .
 fi
-# CONTAINER_RUN_ARGS is deliberately unquoted: it carries multiple words (e.g. --dns 1.1.1.1).
-if [ "$#" -eq 0 ] ; then
-    "$ENGINE" run -it --rm -v "${PWD}":/code --name "$CONTAINER" $CONTAINER_RUN_ARGS "$IMAGE":latest
+# Only ask for a TTY when there is one. Allocating one without a terminal fails outright - docker reports
+# "the input device is not a TTY", Apple's container reports "Operation not supported by device" - which
+# makes the build unusable from CI, a script, or anything running in the background.
+if [ -t 0 ] ; then
+    TTY_ARGS="-it"
 else
-    "$ENGINE" run -it --rm -v "${PWD}":/code --name "$CONTAINER" $CONTAINER_RUN_ARGS "$IMAGE":latest "$@"
+    TTY_ARGS=""
+fi
+
+# TTY_ARGS and CONTAINER_RUN_ARGS are deliberately unquoted: they carry multiple words (e.g. --dns 1.1.1.1).
+if [ "$#" -eq 0 ] ; then
+    "$ENGINE" run $TTY_ARGS --rm -v "${PWD}":/code --name "$CONTAINER" $CONTAINER_RUN_ARGS "$IMAGE":latest
+else
+    "$ENGINE" run $TTY_ARGS --rm -v "${PWD}":/code --name "$CONTAINER" $CONTAINER_RUN_ARGS "$IMAGE":latest "$@"
 fi

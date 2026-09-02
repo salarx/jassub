@@ -1,0 +1,14 @@
+{
+  "name": "@salarx/jassub",
+  "exports": {
+    "./deno": "./src/deno.ts"
+  },
+  "imports": {
+    "abslink": "npm:abslink@^1.2.2",
+    "abslink/w3c": "npm:abslink@^1.2.2/w3c",
+    "lfa-ponyfill": "npm:lfa-ponyfill@^1.1.0"
+  },
+  "compilerOptions": {
+    "lib": ["deno.window", "dom", "dom.iterable"]
+  }
+}

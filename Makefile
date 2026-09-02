@@ -7,6 +7,11 @@ BASE_DIR:=$(dir $(realpath $(firstword $(MAKEFILE_LIST))))
 # Keep caches separate so legacy and modern builds can coexist.
 ifeq (${MODERN},1)
 	BUILD_VARIANT := modern
+else ifeq (${SIMD},1)
+	BUILD_VARIANT := simd
+else ifeq (${NODEJS},1)
+	# deliberately the simd tree: same compiler flags, only the link differs
+	BUILD_VARIANT := simd
 else
 	BUILD_VARIANT := legacy
 endif
@@ -34,6 +39,31 @@ SIMD_ARGS = \
 	-mfma \
 	-mrelaxed-simd
 
+# Fixed-width SIMD only. The modern build is unusable anywhere relaxed SIMD is missing - Bun's
+# JavaScriptCore rejects that binary outright ("relaxed simd instructions not supported"), so it falls all
+# the way back to the scalar build and pays about 3x for it. simd128 itself is universal. The AVX/FMA
+# lowerings are dropped along with -mrelaxed-simd because emscripten implements them with relaxed ops.
+# Overridable per variant. The default pool expression is browser-specific: it asks the user agent and
+# crossOriginIsolated, both of which are meaningless on a server runtime.
+# emscripten picks the module format partly from the output extension. With ENVIRONMENT including node it
+# emits require() alongside top-level await, and a .js file is then ambiguous to Node; .mjs is not.
+WORKER_EXT ?= js
+EXPORT_ES6 ?= 1
+EXTRA_EXTERN_PRE ?=
+ENVIRONMENT ?= worker
+PTHREAD_POOL_SIZE ?= '!navigator.userAgent.toLowerCase().includes("firefox") && self.crossOriginIsolated ? Math.min(Math.max(0, navigator.hardwareConcurrency - 2), 8) : 0'
+
+SIMD_ARGS_PLAIN = \
+	-msimd128 \
+	-msse \
+	-msse2 \
+	-msse3 \
+	-mssse3 \
+	-msse4 \
+	-msse4.1 \
+	-msse4.2 \
+	-ftree-vectorize
+
 ifeq (${MODERN},1)
 	WORKER_NAME = jassub-worker-modern
 	WORKER_ARGS = \
@@ -43,6 +73,35 @@ ifeq (${MODERN},1)
 	override CFLAGS += $(SIMD_ARGS)
 	override CXXFLAGS += $(SIMD_ARGS)
 
+else ifeq (${NODEJS},1)
+	# Same libraries as the SIMD build, linked for a server runtime instead of a browser one.
+	#
+	# ENVIRONMENT=worker tells emscripten the only environment is a web Worker, so it never emits the Node
+	# pthread path - the one that drives threads through worker_threads and does the handshake itself. Under
+	# Bun that leaves the web-Worker path, which needs WorkerGlobalScope, a propagated name and a location
+	# that Bun's workers do not have, and stalls even once all three are shimmed in.
+	WORKER_NAME = jassub-worker-node
+	WORKER_ARGS = \
+		-s WASM=1 \
+		$(SIMD_ARGS_PLAIN) \
+		-s PTHREAD_POOL_SIZE_STRICT=0
+
+	ENVIRONMENT = node,worker
+	PTHREAD_POOL_SIZE = 8
+	WORKER_EXT = mjs
+	# gives emscripten's node path the CommonJS bindings it expects, without the file being CommonJS
+	EXTRA_EXTERN_PRE = --extern-pre-js src/worker/extern-pre-node.js
+
+	override CFLAGS += $(SIMD_ARGS_PLAIN)
+	override CXXFLAGS += $(SIMD_ARGS_PLAIN)
+else ifeq (${SIMD},1)
+	WORKER_NAME = jassub-worker-simd
+	WORKER_ARGS = \
+		-s WASM=1 \
+		$(SIMD_ARGS_PLAIN)
+
+	override CFLAGS += $(SIMD_ARGS_PLAIN)
+	override CXXFLAGS += $(SIMD_ARGS_PLAIN)
 else
 	WORKER_NAME = jassub-worker
 	WORKER_ARGS = \
@@ -172,7 +231,7 @@ LIBASS_DEPS = \
 	$(DIST_DIR)/lib/libass.a
 
 
-dist: $(LIBASS_DEPS) src/wasm/$(WORKER_NAME).js
+dist: $(LIBASS_DEPS) src/wasm/$(WORKER_NAME).$(WORKER_EXT)
 
 # Dist Files https://github.com/emscripten-core/emscripten/blob/main/src/settings.js
 
@@ -223,25 +282,26 @@ COMPAT_ARGS = \
 # LIBASS_DEPS belongs here: without it, rebuilding any static library (a submodule bump, a patch change)
 # leaves the previously linked wasm in place and make reports success, so the output silently does not
 # contain the libraries that were just built.
-src/wasm/$(WORKER_NAME).js: src/JASSUB.cpp src/worker/pre-worker.js src/worker/extern-pre-worker.js $(LIBASS_DEPS)
+src/wasm/$(WORKER_NAME).$(WORKER_EXT): src/JASSUB.cpp src/worker/pre-worker.js src/worker/extern-pre-worker.js $(LIBASS_DEPS)
 	mkdir -p src/wasm
 	emcc src/JASSUB.cpp $(LIBASS_DEPS) \
 		$(WORKER_ARGS) \
 		$(PERFORMANCE_ARGS) \
 		$(SIZE_ARGS) \
 		$(COMPAT_ARGS) \
+		$(EXTRA_EXTERN_PRE) \
 		--extern-pre-js src/worker/extern-pre-worker.js \
 		--pre-js src/worker/pre-worker.js \
 		--emit-tsd='types.d.ts' \
-		-s ENVIRONMENT=worker \
+		-s ENVIRONMENT=$(ENVIRONMENT) \
 		-s EXIT_RUNTIME=0 \
 		-s ALLOW_MEMORY_GROWTH=1 \
 		-s GROWABLE_ARRAYBUFFERS=0 \
 		-s MODULARIZE=1 \
-		-s EXPORT_ES6=1 \
+		-s EXPORT_ES6=$(EXPORT_ES6) \
 		-lembind \
 		-pthread \
-		-s PTHREAD_POOL_SIZE='!navigator.userAgent.toLowerCase().includes("firefox") && self.crossOriginIsolated ? Math.min(Math.max(0, navigator.hardwareConcurrency - 2), 8) : 0' \
+		-s PTHREAD_POOL_SIZE=$(PTHREAD_POOL_SIZE) \
 		-o $@
 
 # dist/license/all:

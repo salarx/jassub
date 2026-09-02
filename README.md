@@ -38,6 +38,15 @@ The
 
 headers are recommended to use this library, as it uses SharedArrayBuffer for multi-threading, but if you can't set them, it will fallback automatically to work in single-threaded mode. Firefox doesn't support threading so they are not required there.
 
+They are worth more than "recommended" suggests. Serving the same page without them, on the same machine
+and content, costs **3.3x**: a dense 1080p frame goes from 4.7ms to 15.5ms, because libass drops from eight
+threads to one. Nothing else in this library comes close for the effort - two response headers, no code
+change. If subtitle rendering feels heavy in a browser, check `crossOriginIsolated` in the console before
+looking anywhere else; `false` means you are on one thread.
+
+The full recipe - per-host header config, what `require-corp` breaks, and the softer `credentialless`
+option - is in [docs/cross-origin-isolation.md](docs/cross-origin-isolation.md).
+
 At minimum WASM + TextDecoder + OffscreenCanvas + Web Workers + Proxy + Fetch + Promise + getVideoPlaybackQuality/requestVideoFrameCallback are required for JASSUB to work.
 
 <!-- 
@@ -68,7 +77,7 @@ Install the library via:
 ```
 
 ```js
-import JASSUB from 'jassub'
+import JASSUB from '@salarx/jassub'
 
 const instance = new JASSUB({
   video: document.querySelector('video'),
@@ -79,15 +88,17 @@ const instance = new JASSUB({
 If you use a custom bundler, and need to override the worker and wasm URLs you can instead do:
 
 ```js
-import JASSUB from 'jassub'
-import workerUrl from 'jassub/dist/jassub-worker.js?worker&url'
-import wasmUrl from 'jassub/dist/jassub-worker.wasm?url' // non-SIMD fallback
-import modernWasmUrl from 'jassub/dist/jassub-worker-modern.wasm?url' // SIMD
+import JASSUB from '@salarx/jassub'
+import workerUrl from '@salarx/jassub/dist/jassub-worker.js?worker&url'
+import wasmUrl from '@salarx/jassub/dist/jassub-worker.wasm?url' // non-SIMD fallback
+import modernWasmUrl from '@salarx/jassub/dist/jassub-worker-modern.wasm?url' // relaxed SIMD
+import simdWasmUrl from '@salarx/jassub/dist/jassub-worker-simd.wasm?url' // fixed-width SIMD
 
 const instance = new JASSUB({
   video: document.querySelector('video'),
   subContent: subtitleString,
-  workerUrl, // you can also use: `new URL('jassub/dist/jassub-worker.js', import.meta.url)` instead of importing it as an url, or whatever solution suits you
+  simdWasmUrl,
+  workerUrl, // you can also use: `new URL('@salarx/jassub/dist/jassub-worker.js', import.meta.url)` instead of importing it as an url, or whatever solution suits you
   wasmUrl,
   modernWasmUrl
 })
@@ -100,7 +111,7 @@ However this shoud almost never be necessary.
 You're also able to use it without any video. However, that requires you to set the time the subtitles should render at yourself:
 
 ```js
-import JASSUB from 'jassub'
+import JASSUB from '@salarx/jassub'
 
 const instance = new JASSUB({
   canvas: document.querySelector('canvas'),
@@ -207,59 +218,12 @@ If you want to support even older engines, then please check the [v1.8.8 tag](ht
 
 Support for older browsers (without OffscreenCanvas, WebAssembly threads, etc) has been dropped in v2.0.0 and later.
 
-# How to build?
+# Outside the browser
 
-## Get the Source
+JASSUB also runs in Deno, Node and Bun, rendering straight to an RGBA buffer with no canvas and real
+libass threads. See [docs/server-runtimes.md](docs/server-runtimes.md).
 
-Run git clone --recursive https://github.com/ThaUnknown/jassub.git
+# Building
 
-### In a container
-
-1. Install a container runtime (see below)
-2. `./run-docker-build.sh` or `./run-docker-build.ps1`
-
-The shell script honours `CONTAINER_ENGINE` (default `docker`) and `CONTAINER_RUN_ARGS`, so any runtime with a
-docker-compatible `build`/`run` CLI can drive the same image.
-
-**Linux** — Docker or Podman natively.
-
-**macOS 26+** — Apple's [`container`](https://github.com/apple/container) is a native alternative to Docker
-Desktop:
-
-```shell
-brew install container && container system start
-CONTAINER_ENGINE=container ./run-docker-build.sh
-```
-
-If DNS fails inside the container, your host resolver is probably on loopback (Cloudflare WARP sets
-`127.0.2.2`), which the guest cannot reach. Point it at a reachable resolver:
-
-```shell
-CONTAINER_ENGINE=container CONTAINER_RUN_ARGS="--dns 1.1.1.1" ./run-docker-build.sh
-```
-
-**Windows** — there is no native Linux-container runtime. Docker Desktop, Podman Desktop and Rancher Desktop
-all run the containers inside WSL2, and Windows containers can only run Windows images, so this Linux image
-cannot run on them. The genuinely container-free path is to skip the container and build directly in WSL2:
-
-```shell
-wsl --install -d Ubuntu          # once, from PowerShell
-```
-
-then build inside WSL2 without any container — see *Without a container* below. `./run-docker-build.ps1`
-still works if you would rather keep Docker Desktop.
-
-### Without a container
-
-The container exists only to pin the toolchain; the build itself is a plain `make`. On any Linux (including
-WSL2) you need [emsdk](https://emscripten.org/docs/getting_started/downloads.html) 6.0.4 on `PATH` plus the
-packages the [`Dockerfile`](Dockerfile) installs:
-
-```shell
-sudo apt-get install -y build-essential cmake dos2unix git ragel patch libtool itstool \
-    pkg-config python3 gettext autopoint automake autoconf m4 gperf licensecheck
-npm install
-make && MODERN=1 make
-```
-
-Both `make` invocations are needed: the first builds the baseline worker, the second the modern (SIMD) one.
+The wasm binaries are committed, so building is only needed to change libass or the C++ bindings. See
+[docs/building.md](docs/building.md).
